@@ -99,7 +99,9 @@ image:
       Restore-ImageValues $valuesImage
       throw "deploy thất bại -> Helm đã tự rollback về revision $previous. $_"
     }
-    $running = kubectl get pods -l "app=$svc" -o jsonpath="{range .items[*]}{.spec.containers[0].image}{'\n'}{end}" | Sort-Object -Unique
+    # bỏ qua Pod cũ đang Terminating (có deletionTimestamp)
+    $running = (kubectl get pods -l "app=$svc" -o json | ConvertFrom-Json).items |
+      Where-Object { -not $_.metadata.deletionTimestamp } | ForEach-Object { $_.spec.containers[0].image } | Sort-Object -Unique
     Write-Host "    Pod đang chạy image: $($running -join ', ')"
   }
 
