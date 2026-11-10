@@ -1,0 +1,4 @@
+# TẠO BỞI ci/pipeline.ps1 - KHÔNG sửa tay. Image đang chạy ở prod cho payment.
+image:
+  repository: localhost:5001/payment-service
+  tag: "f7958a35c003"
