@@ -84,7 +84,11 @@ foreach ($svc in $Service) {
     docker push -q $image
   }
 
-  $previous = (helm history $svc -o json | ConvertFrom-Json | Where-Object status -eq "deployed").revision
+  # revision đang chạy (null nếu release chưa tồn tại - lần cài đầu trên cluster mới; `helm history` sẽ lỗi)
+  $previous = $null
+  if (helm list -q --filter "^$svc$") {
+    $previous = (helm history $svc -o json | ConvertFrom-Json | Where-Object status -eq "deployed").revision
+  }
   Invoke-Stage "4/6 deploy" {
     @"
 # TẠO BỞI ci/pipeline.ps1 - KHÔNG sửa tay. Image đang chạy ở prod cho $svc.
@@ -108,8 +112,13 @@ image:
   Invoke-Stage "5/6 smoke test" {
     try { Test-Smoke $svc }
     catch {
-      Write-Host "    smoke test lỗi -> helm rollback $svc $previous" -ForegroundColor Red
-      helm rollback $svc $previous --wait --timeout $Timeout
+      if ($previous) {
+        Write-Host "    smoke test lỗi -> helm rollback $svc $previous" -ForegroundColor Red
+        helm rollback $svc $previous --wait --timeout $Timeout
+      } else {
+        Write-Host "    smoke test lỗi ở lần cài ĐẦU (không có revision để rollback) -> helm uninstall $svc" -ForegroundColor Red
+        helm uninstall $svc --wait
+      }
       Restore-ImageValues $valuesImage
       throw
     }

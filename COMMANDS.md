@@ -1,15 +1,17 @@
-# Grab Mini - Command Reference (Phase 0 → Phase 22)
+# Grab Mini - Command Reference (Phase 0 → Phase 23)
 
 Nhật ký lab: mỗi **Scenario** = lệnh đã chạy thật + code liên quan + kết quả đã verify + bài học, theo đúng thứ tự làm. Giáo trình (học gì, vì sao) nằm ở [../Roadmap.md](../Roadmap.md).
 
-> **⚠️ Từ Phase 22, Helm là nguồn sự thật của namespace `default`** (`charts/` + `helm-values/`). Các lệnh `kubectl apply -f k8s/...` trong Scenario 0-20 là **lịch sử** để hiểu từng bước - đừng chạy lại lên cluster hiện tại (tạo drift với Helm). Muốn dựng lại môi trường: dùng [[#🔁 Dựng lại toàn bộ cluster từ đầu|🔁 Dựng lại toàn bộ cluster]].
+> **⚠️ Helm là nguồn sự thật của namespace `default`** (`charts/` + `helm-values/`), và **từ Phase 23, deploy app chỉ qua `./ci/pipeline.ps1 -Service <svc>`**. Các lệnh `kubectl apply -f k8s/...` trong Scenario 0-20 và `helm upgrade` tay trong Scenario 22 là **lịch sử** - chạy lại sẽ tạo drift hoặc quay về image cũ (`helm upgrade` thiếu `-f helm-values/<svc>-image.yaml` = về `<svc>-service:v1`). Muốn dựng lại môi trường: dùng [[#🔁 Dựng lại toàn bộ cluster từ đầu|🔁 Dựng lại toàn bộ cluster]].
 
 ## 📊 Trạng thái hiện tại (11/11/2026)
 
 | Thành phần | Chi tiết | Quản lý bởi |
 |---|---|---|
 | Cluster | `kind` v0.33, `grab-mini`, 1 control-plane (port 80/443 ra host) + 2 worker - `kind-multi-node.yaml` | `kind` |
-| App | `booking` (HPA 2-10), `payment` x3, `user` x3 - image `:v1` có `/metrics`; probe, PDB, topologySpread, failover 30s | Helm: `booking`, `payment`, `user` (chart `grab-service`) |
+| Code | `grab-mini/` là git repo **local** (nhánh `main`, không có remote); mỗi lần deploy = 1 commit `deploy(<svc>): <sha>` | `git` |
+| Registry | `registry:2.8.3` container `kind-registry`, `localhost:5001` (trong cluster: `http://kind-registry:5000`) | `ci/setup-local-registry.ps1` |
+| App | `booking` (HPA 2-10), `payment` x3, `user` x3 - image `localhost:5001/<svc>-service:<git-sha>` (tag đang chạy: `helm-values/<svc>-image.yaml`); probe, PDB, topologySpread, failover 30s | `ci/pipeline.ps1` → Helm: `booking`, `payment`, `user` (chart `grab-service`) |
 | Platform | ConfigMap `booking-config`, Ingress `/users` `/booking` `/payment`, 5 NetworkPolicy (default-deny), CronJob `settlement-job`, StatefulSet `postgres` | Helm: `grab-platform` |
 | Secret | `booking-secret` | `kubectl create secret` (cố ý ngoài Git) |
 | Hạ tầng | `ingress-nginx` (+ patch nodeSelector), `metrics-server` (+ patch insecure-tls) | `kubectl apply` từ URL upstream |
@@ -41,6 +43,7 @@ Nhật ký lab: mỗi **Scenario** = lệnh đã chạy thật + code liên quan
 - [[#Scenario 20 - Observability: Prometheus + Grafana + app metrics (Phase 21)|Scenario 20 - Observability: Prometheus + Grafana + app metrics (Phase 21)]]
 - [[#Scenario 21 - Logs (Loki + Alloy) + Alert (PrometheusRule + Alertmanager) (Phase 21)|Scenario 21 - Logs (Loki + Alloy) + Alert (PrometheusRule + Alertmanager) (Phase 21)]]
 - [[#Scenario 22 - Helm: chart dùng chung + chuyển resource đang chạy sang Helm (Phase 22)|Scenario 22 - Helm: chart dùng chung + chuyển resource đang chạy sang Helm (Phase 22)]]
+- [[#Scenario 23 - CI/CD: pipeline local + local registry + tag theo git SHA (Phase 23)|Scenario 23 - CI/CD: pipeline local + local registry + tag theo git SHA (Phase 23)]]
 - [[#Cleanup - xoá image Docker cũ không dùng|Cleanup - xoá image Docker cũ không dùng]]
 - [[#🔁 Dựng lại toàn bộ cluster từ đầu|🔁 Dựng lại toàn bộ cluster từ đầu]]
 - [[#🧠 Tổng hợp bài học|🧠 Tổng hợp bài học]]
@@ -2237,17 +2240,10 @@ git commit ──► ci/pipeline.ps1 -Service <svc>
 ```powershell
 cd D:\OBsidian\NUO3HC\Kubernetes\grab-mini
 
-# --- Bước 1: local registry, nối vào mạng của kind ---
-docker run -d --restart=always -p 127.0.0.1:5001:5000 --name kind-registry registry:2.8.3
-docker network connect kind kind-registry
-curl.exe -s http://localhost:5001/v2/_catalog
-
-# --- Bước 2: containerd trên từng node đọc certs.d (mặc định config_path = '' -> bỏ qua hosts.toml) ---
-# làm LẦN LƯỢT từng node, restart containerd không giết container đang chạy
-foreach ($n in "grab-mini-worker","grab-mini-worker2","grab-mini-control-plane") {
-  docker exec $n sh -c 'grep -q certs.d /etc/containerd/config.toml || printf "\n[plugins.\"io.containerd.grpc.v1.cri\".registry]\n  config_path = \"/etc/containerd/certs.d\"\n" >> /etc/containerd/config.toml; mkdir -p /etc/containerd/certs.d/localhost:5001; printf "[host.\"http://kind-registry:5000\"]\n" > /etc/containerd/certs.d/localhost:5001/hosts.toml; systemctl restart containerd'
-  kubectl wait --for=condition=Ready "node/$n" --timeout=90s
-}
+# --- Bước 1+2: local registry + containerd trên từng node (chạy lại nhiều lần vẫn an toàn) ---
+# containerd của kind mặc định config_path = '' (bỏ qua hosts.toml) -> script bật config_path, tạo
+# certs.d/localhost:5001/hosts.toml -> http://kind-registry:5000, restart containerd LẦN LƯỢT từng node
+./ci/setup-local-registry.ps1
 kubectl apply -f k8s/local-registry-hosting.yaml          # ConfigMap chuẩn KEP-1755 (tuỳ chọn)
 
 # kiểm tra cluster pull được từ registry
@@ -2288,6 +2284,7 @@ git revert --no-edit HEAD
 **📄 Code liên quan:**
 
 - `ci/pipeline.ps1` (mới) - 6 stage như sơ đồ trên. Điểm chính: `$PSNativeCommandUseErrorActionPreference = $true` (lệnh ngoài trả exit code ≠ 0 → dừng ngay); guard "phải commit trước" (`git status --porcelain -- <svc>-service charts helm-values`); tag = `git log -1 --format=%h --abbrev=12 -- <svc>-service` (commit cuối **động vào thư mục service**, nên cùng source = cùng tag); smoke test thử lại 10 lần × 3s (ingress-nginx cần vài giây nhận endpoint mới); lỗi ở deploy/smoke → trả `helm-values/<svc>-image.yaml` về bản đã commit.
+- `ci/setup-local-registry.ps1` (mới) - chạy `registry:2.8.3` (nếu chưa có) + `docker network connect kind`; với mỗi node: `docker cp` 2 file (`config-patch.toml`, `hosts.toml`) vào **`/etc/containerd/`** rồi `docker exec` gắn vào config + `systemctl restart containerd` + đợi node `Ready`.
 - `ci/migrate-field-managers.ps1` (mới) - với mọi object của các release: merge patch `metadata.managedFields` = danh sách đã bỏ `kubectl-client-side-apply`, `kubectl-patch`, `kubectl-autoscale` + xoá annotation `last-applied-configuration`. Có `-DryRun` (`--dry-run=server`).
 - `helm-values/<svc>-image.yaml` (mới, **do pipeline tạo** - không sửa tay):
 
@@ -2308,6 +2305,7 @@ git revert --no-edit HEAD
 **✅ Kết quả thật đã verify (11/11/2026):**
 
 - Registry: cluster pull `localhost:5001/registry-test:1` → `Pulling` → `Pulled in 214ms`. Restart containerd lần lượt 3 node: node `Ready` lại ngay, không Pod nào restart.
+- `setup-local-registry.ps1` bản đầu dùng `/tmp` → `cp: cannot stat '/tmp/hosts.toml'` trên cả 3 node (vẫn "chạy được" chỉ vì file cũ còn sót). Sửa sang `/etc/containerd/`, xoá hosts.toml cũ rồi chạy lại: tạo đủ 3 node, pull `--image-pull-policy=Always` → `Pulled in 137ms`, 0 Pod lỗi.
 - Test: 10/10 pass trên máy host (Node 22) trước khi đưa vào pipeline.
 - **Lần chạy đầu `payment` FAIL ở stage deploy**: `conflict with "kubectl-client-side-apply" ... .spec.template.spec.containers[name="payment"].image` → `--rollback-on-failure` tự rollback (revision 5 failed → 6 "Rollback to 4"). Sau `migrate-field-managers.ps1` (20 object): generation Deployment +1 nhưng **không có ReplicaSet mới, Pod giữ nguyên tuổi** → chạy lại pipeline OK.
 - Pipeline 3 service: `payment` 29s, `user` 32s, `booking` 25s (test ~2s, build 3-6s, push 1-1.5s, deploy 13-21s, smoke 2s); mỗi lần 1 commit `deploy(<svc>): <sha>`. Traffic qua Ingress trong lúc lần fail + lần deploy `payment`: **570/570 OK**.
@@ -2326,7 +2324,9 @@ git revert --no-edit HEAD
 >
 > **Bài học quan trọng #5 - local registry trên kind**: `kind` không cấu hình sẵn containerd đọc `certs.d` (`config_path = ''`) → phải bật `config_path` + `hosts.toml` trên mọi node (registry nói HTTP, tên `kind-registry` phân giải được vì cùng mạng Docker `kind`). Image trong cluster tên `localhost:5001/...` nhưng containerd được chỉ sang `http://kind-registry:5000`.
 >
-> **Bài học quan trọng #6 - Windows/PowerShell**: bật `$PSNativeCommandUseErrorActionPreference` thì mọi lệnh ngoài lỗi đều ném exception - kể cả lệnh "dọn dẹp" trong `catch` (vd. `git checkout` file chưa track) → phải tự kiểm tra trước khi gọi. Truyền mảng `-Service a,b` chỉ chạy được khi gọi script trong phiên PowerShell (`./ci/pipeline.ps1`), không qua `pwsh -File`. Git Bash tự đổi `/etc/...` thành `C:/Program Files/Git/etc/...` khi `docker exec` → `MSYS_NO_PATHCONV=1`.
+> **Bài học quan trọng #6 - Windows/PowerShell**: bật `$PSNativeCommandUseErrorActionPreference` thì mọi lệnh ngoài lỗi đều ném exception - kể cả lệnh "dọn dẹp" trong `catch` (vd. `git checkout` file chưa track) → phải tự kiểm tra trước khi gọi. Truyền mảng `-Service a,b` chỉ chạy được khi gọi script trong phiên PowerShell (`./ci/pipeline.ps1`), không qua `pwsh -File`. Git Bash tự đổi `/etc/...` thành `C:/Program Files/Git/etc/...` khi `docker exec` → `MSYS_NO_PATHCONV=1`. `"$node:"` trong chuỗi PowerShell là lỗi cú pháp (`:` = scope) → `"${node}:"`.
+>
+> **Bài học quan trọng #7 - `/tmp` của node kind là tmpfs**: `docker cp file node:/tmp/x` báo thành công nhưng bên trong container KHÔNG thấy file (docker cp ghi vào lớp filesystem bên dưới mount tmpfs). Copy vào thư mục không phải mount (vd. `/etc/containerd/`). Bài học phụ: lỗi bị file cũ còn sót che mất - kiểm thử script "idempotent" thì phải xoá trạng thái cũ trước khi chạy lại.
 
 ---
 
@@ -2349,7 +2349,7 @@ Dùng khi cluster hỏng hẳn - điển hình: **Docker Desktop restart làm `g
 
 > Mất data: PVC của Postgres (local-path) nằm trong container node → **xoá cluster = mất data Postgres**.
 >
-> Runbook này gộp từ các bước đã verify riêng lẻ ở Scenario 12, 16, 20, 21, 22 - **chưa chạy trọn vẹn 1 lần liên tục**; nếu bước nào lỗi, xem lại scenario tương ứng.
+> Runbook này gộp từ các bước đã verify riêng lẻ ở Scenario 12, 16, 20, 21, 22, 23 - **chưa chạy trọn vẹn 1 lần liên tục**; nếu bước nào lỗi, xem lại scenario tương ứng.
 
 ```powershell
 cd D:\OBsidian\NUO3HC\Kubernetes\grab-mini
@@ -2358,11 +2358,9 @@ cd D:\OBsidian\NUO3HC\Kubernetes\grab-mini
 kind delete cluster --name grab-mini
 kind create cluster --name grab-mini --config kind-multi-node.yaml
 
-# --- 2. image (Docker Desktop vẫn còn image cũ; chỉ build lại nếu sửa code) ---
-foreach ($s in "booking","payment","user") {
-  docker build -t "$s-service:v1" "./$s-service"
-  kind load docker-image "$s-service:v1" --name grab-mini
-}
+# --- 2. local registry: container kind-registry KHÔNG bị xoá theo cluster (image trong đó vẫn còn),
+#        nhưng containerd của các node MỚI phải cấu hình lại ---
+./ci/setup-local-registry.ps1
 
 # --- 3. ingress-nginx + metrics-server (patch bằng file - tránh lỗi escape JSON của PowerShell; CHỈ chạy 1 lần) ---
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
@@ -2382,12 +2380,12 @@ helm upgrade --install loki grafana/loki --version 7.5.0 -n monitoring -f k8s/mo
 helm upgrade --install alloy grafana/alloy --version 1.15.0 -n monitoring -f k8s/monitoring/alloy-values.yaml --wait
 kubectl apply -f k8s/monitoring/servicemonitor-apps.yaml -f k8s/monitoring/alerts-apps.yaml -f k8s/monitoring/alert-webhook.yaml -f k8s/monitoring/grab-mini-dashboard-cm.yaml
 
-# --- 5. app: Secret -> platform (ConfigMap, NetworkPolicy, Ingress, Postgres...) -> 3 service ---
+# --- 5. app: Secret -> platform (ConfigMap, NetworkPolicy, Ingress, Postgres...) -> 3 service qua pipeline ---
 kubectl create secret generic booking-secret --from-literal=DB_USERNAME=admin --from-literal=DB_PASSWORD=change-me
 helm upgrade --install grab-platform charts/grab-platform --wait
-helm upgrade --install payment charts/grab-service -f helm-values/payment.yaml -f helm-values/env-prod.yaml --wait
-helm upgrade --install user    charts/grab-service -f helm-values/user.yaml    -f helm-values/env-prod.yaml --wait
-helm upgrade --install booking charts/grab-service -f helm-values/booking.yaml -f helm-values/env-prod.yaml -f helm-values/booking-prod.yaml --wait
+./ci/pipeline.ps1 -Service payment,user,booking      # cluster mới: Helm tự tạo object -> KHÔNG cần migrate-field-managers
+# (không có pipeline: helm upgrade --install <svc> charts/grab-service -f helm-values/<svc>.yaml -f helm-values/env-prod.yaml
+#   [-f helm-values/booking-prod.yaml] -f helm-values/<svc>-image.yaml --wait  - image phải có sẵn trong registry)
 
 # --- 6. verify ---
 helm list -A                                            # 7 release
