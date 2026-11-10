@@ -27,6 +27,7 @@ test("POST /payment trả lại body đã nhận", async () => {
   const body = await r.json();
   assert.equal(body.service, "payment-service");
   assert.deepEqual(body.body, { amount: 42 });
+  assert.match(body.transactionId, /^[0-9a-f-]{36}$/, "mỗi payment phải có transactionId (UUID)");
 });
 
 test("GET /metrics có counter của /payment", async () => {

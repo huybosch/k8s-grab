@@ -1,4 +1,5 @@
 const express = require("express");
+const { randomUUID } = require("node:crypto");
 const metrics = require("./metrics");
 const app = express();
 app.use(express.json());
@@ -12,7 +13,7 @@ app.get("/health", (req, res) => res.status(200).send("ok"));
 
 app.post("/payment", (req, res) => {
   console.log("handled by pod:", process.env.HOSTNAME);
-  res.json({ service: "payment-service", version: VERSION, body: req.body, pod: process.env.HOSTNAME });
+  res.json({ service: "payment-service", version: VERSION, transactionId: randomUUID(), body: req.body, pod: process.env.HOSTNAME });
 });
 
 // Phase 23: chỉ listen khi chạy trực tiếp; khi test thì require("./server") lấy app
