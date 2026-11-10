@@ -1,4 +1,5 @@
 const express = require("express");
+const { randomUUID } = require("node:crypto");
 const metrics = require("./metrics");
 const app = express();
 app.use(express.json());
@@ -31,7 +32,7 @@ app.post("/booking", async (req, res) => {
     });
     if (!r.ok) throw new Error(`payment-service HTTP ${r.status}`);
     const payment = await r.json();
-    res.json({ service: "booking-service", version: VERSION, payment });
+    res.json({ service: "booking-service", version: VERSION, bookingId: randomUUID(), payment });
   } catch (err) {
     const detail = err.name === "TimeoutError" ? `timeout ${PAYMENT_TIMEOUT_MS}ms` : (err.cause && err.cause.code) || err.message;
     console.error("payment call failed:", detail);

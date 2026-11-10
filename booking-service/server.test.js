@@ -49,6 +49,7 @@ test("POST /booking gọi payment và trả kết quả của payment", async ()
   assert.equal(body.service, "booking-service");
   assert.equal(body.payment.service, "payment-service");
   assert.deepEqual(body.payment.body, { amount: 100 });
+  assert.match(body.bookingId, /^[0-9a-f-]{36}$/, "mỗi booking phải có bookingId (UUID)");
 });
 
 test("POST /booking trả 503 (không treo) khi payment không kết nối được", async () => {
