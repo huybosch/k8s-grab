@@ -1,0 +1,4 @@
+# TẠO BỞI ci/pipeline.ps1 - KHÔNG sửa tay. Image đang chạy ở prod cho booking.
+image:
+  repository: localhost:5001/booking-service
+  tag: "f7958a35c003"
