@@ -1,5 +1,11 @@
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
+# Phase 23 - containerd đọc cấu hình registry trong /etc/containerd/certs.d (cho local registry localhost:5001)
+# Sau khi tạo cluster vẫn phải tạo hosts.toml trên từng node - xem COMMANDS.md Scenario 23
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "/etc/containerd/certs.d"
 nodes:
   - role: control-plane
     kubeadmConfigPatches:
