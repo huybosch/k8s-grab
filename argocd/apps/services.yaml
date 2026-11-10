@@ -1,0 +1,46 @@
+# Phase 24 - 3 service dùng chung chart grab-service -> 1 ApplicationSet sinh ra 3 Application
+# Giá trị = đúng các file pipeline Phase 23 đã dùng: <svc>.yaml + env-prod.yaml (+ <svc>-prod.yaml) + <svc>-image.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: grab-services
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - list:
+        elements:
+          - svc: booking
+          - svc: payment
+          - svc: user
+  template:
+    metadata:
+      name: "{{.svc}}"
+      labels:
+        grab-mini/tier: service
+    spec:
+      project: grab-mini
+      source:
+        repoURL: https://github.com/huybosch/k8s-grab.git
+        targetRevision: main
+        path: charts/grab-service
+        helm:
+          # PHẢI trùng tên Helm release cũ: pod template có label app.kubernetes.io/instance={{ .Release.Name }}
+          # -> đổi tên = đổi pod template = rollout toàn bộ Pod
+          releaseName: "{{.svc}}"
+          valueFiles:
+            - "../../helm-values/{{.svc}}.yaml"
+            - ../../helm-values/env-prod.yaml
+            - "../../helm-values/{{.svc}}-prod.yaml"    # chỉ booking có -> cần ignoreMissingValueFiles
+            - "../../helm-values/{{.svc}}-image.yaml"   # pipeline ghi tag vào đây rồi git push
+          ignoreMissingValueFiles: true
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: default
+      syncPolicy:
+        automated:
+          prune: true      # xoá khỏi Git -> xoá khỏi cluster
+          selfHeal: true   # ai sửa tay trên cluster -> Argo CD đưa về đúng Git
+        syncOptions:
+          - ServerSideApply=true   # giống Helm 4 ở Phase 22-23, field manager = argocd-controller

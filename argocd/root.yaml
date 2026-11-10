@@ -1,0 +1,26 @@
+# Phase 24 - bootstrap GitOps: lệnh kubectl apply DUY NHẤT còn lại (chạy 1 lần):
+#   kubectl apply -f argocd/root.yaml
+# Sau đó mọi thay đổi (thêm/sửa/xoá app) = sửa file trong argocd/apps/ rồi git push.
+#
+#   root (app-of-apps) ──► argocd/apps/ ──► AppProject grab-mini            (sync-wave -1)
+#                                       ├─► ApplicationSet grab-services ──► booking, payment, user
+#                                       └─► Application grab-platform
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+spec:
+  project: default   # root tạo Application/ApplicationSet trong namespace argocd -> cần project default
+  source:
+    repoURL: https://github.com/huybosch/k8s-grab.git
+    targetRevision: main
+    path: argocd/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

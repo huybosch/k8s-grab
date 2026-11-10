@@ -1,0 +1,17 @@
+# Phase 24 - Project giới hạn những gì app được làm: chỉ repo này, chỉ namespace default
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: grab-mini
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"   # tạo project TRƯỚC các Application dùng nó
+spec:
+  description: Grab Mini (Phase 24)
+  sourceRepos: [https://github.com/huybosch/k8s-grab.git]
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: default
+  clusterResourceWhitelist: []          # app KHÔNG được tạo resource cấp cluster (ClusterRole, Namespace...)
+  namespaceResourceWhitelist:
+    - { group: "*", kind: "*" }

@@ -1,0 +1,37 @@
+# Phase 24 - Argo CD cho cluster kind grab-mini
+#   helm upgrade --install argocd argo/argo-cd --version 10.16.0 -n argocd --create-namespace -f k8s/argocd/values.yaml
+# Bản tối giản cho lab: 1 replica mỗi thành phần, không Dex (chỉ user admin), không notifications.
+global:
+  domain: argocd.localhost
+
+configs:
+  params:
+    server.insecure: true            # UI qua port-forward HTTP, không cần TLS trong lab
+    # So sánh Git vs cluster bằng server-side dry-run (giống kubectl diff): API server tự điền default
+    # (vd. volumeClaimTemplates của StatefulSet) -> không báo OutOfSync giả
+    controller.diff.server.side: "true"
+  cm:
+    # Không có webhook GitHub -> cluster (máy cá nhân, không có IP public) nên Argo CD tự POLL Git.
+    # Mặc định 180s; để 60s cho lab đỡ chờ. Pipeline còn chủ động "refresh" ngay sau khi push.
+    timeout.reconciliation: 60s
+
+dex:
+  enabled: false
+notifications:
+  enabled: false
+
+controller:
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+repoServer:
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+server:
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+applicationSet:
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+redis:
+  resources:
+    requests: { cpu: 20m, memory: 32Mi }

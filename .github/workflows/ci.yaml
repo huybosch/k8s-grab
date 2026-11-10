@@ -1,29 +1,28 @@
-# Phase 23 - bản GitHub Actions của ci/pipeline.ps1 (CHƯA chạy - repo chưa có trên GitHub)
+# Phase 23-24 - CI trên GitHub Actions: CHỈ test + build (kiểm tra), KHÔNG push image, KHÔNG deploy
 #
-#   push main ──► changes (service nào đổi?) ──► build (matrix: test -> build -> push GHCR) ──► record (commit tag)
-#   pull_request ──► chỉ test + build, KHÔNG push, KHÔNG record
+#   push main / pull_request ──► changes (service nào đổi?) ──► check (matrix: npm test -> docker build)
 #
-# Khác với bản local:
-#   - registry = ghcr.io/<owner>, đăng nhập bằng GITHUB_TOKEN có sẵn
-#   - KHÔNG deploy: runner của GitHub không vào được cluster kind trên máy cá nhân. CI chỉ commit
-#     helm-values/<svc>-image.yaml -> Argo CD (Phase 24) thấy commit và tự sync vào cluster (GitOps).
-#     Muốn CD trực tiếp: dùng self-hosted runner trên máy có kubectl/helm trỏ tới cluster.
+# CD nằm ở chỗ khác (GitOps, Phase 24):
+#   ci/pipeline.ps1 (máy local) : test -> build -> push localhost:5001 -> commit helm-values/<svc>-image.yaml -> git push
+#   Argo CD (trong cluster)     : thấy commit mới -> sync vào cluster
+# Vì sao GitHub không push image: cluster kind chỉ kéo được từ registry local; image trên GHCR mặc định private
+# -> nếu CI commit tag ghcr.io/... thì Argo CD sync xong Pod sẽ ImagePullBackOff.
+# Trên cluster thật (EKS...): thêm bước push registry chung (GHCR/ECR) + commit tag ở đây, bỏ pipeline local.
 name: ci
 
 on:
   push:
     branches: [main]
-    paths: ["booking-service/**", "payment-service/**", "user-service/**"]
+    paths: ["booking-service/**", "payment-service/**", "user-service/**", ".github/workflows/ci.yaml"]
   pull_request:
-    paths: ["booking-service/**", "payment-service/**", "user-service/**"]
+    paths: ["booking-service/**", "payment-service/**", "user-service/**", ".github/workflows/ci.yaml"]
 
 permissions:
-  contents: write     # job record commit lại helm-values
-  packages: write     # push image lên GHCR
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: false   # không huỷ giữa chừng 1 lần deploy đang chạy
+  cancel-in-progress: true   # chỉ là kiểm tra -> commit mới huỷ lần chạy cũ
 
 jobs:
   changes:
@@ -36,11 +35,11 @@ jobs:
         uses: dorny/paths-filter@v3
         with:
           filters: |
-            booking: booking-service/**
-            payment: payment-service/**
-            user: user-service/**
+            booking: [booking-service/**, .github/workflows/ci.yaml]
+            payment: [payment-service/**, .github/workflows/ci.yaml]
+            user: [user-service/**, .github/workflows/ci.yaml]
 
-  build:
+  check:
     needs: changes
     if: needs.changes.outputs.services != '[]'
     runs-on: ubuntu-latest
@@ -50,14 +49,6 @@ jobs:
         service: ${{ fromJSON(needs.changes.outputs.services) }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   # cần lịch sử để tính tag = commit cuối động vào thư mục service (giống bản local)
-
-      - id: meta
-        run: |
-          sha=$(git log -1 --format=%h --abbrev=12 -- "${{ matrix.service }}-service")
-          echo "tag=$sha" >> "$GITHUB_OUTPUT"
-          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${{ matrix.service }}-service" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v4
         with:
@@ -71,40 +62,9 @@ jobs:
           npm ci --no-audit --no-fund
           npm test
 
-      - uses: docker/login-action@v3
-        if: github.event_name == 'push'
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: build (+ push nếu là push lên main)
+      - name: build (không push)
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.service }}-service
-          push: ${{ github.event_name == 'push' }}
-          tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
-          labels: org.opencontainers.image.revision=${{ steps.meta.outputs.tag }}
-
-  record:
-    # 1 job duy nhất commit cho mọi service -> tránh nhiều job matrix push đè nhau
-    needs: [changes, build]
-    if: github.event_name == 'push' && needs.changes.outputs.services != '[]'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: ghi tag vào helm-values/<svc>-image.yaml
-        run: |
-          owner="${GITHUB_REPOSITORY_OWNER,,}"
-          for svc in $(echo '${{ needs.changes.outputs.services }}' | jq -r '.[]'); do
-            sha=$(git log -1 --format=%h --abbrev=12 -- "$svc-service")
-            printf '# TẠO BỞI CI - KHÔNG sửa tay. Image đang chạy ở prod cho %s.\nimage:\n  repository: ghcr.io/%s/%s-service\n  tag: "%s"\n' \
-              "$svc" "$owner" "$svc" "$sha" > "helm-values/$svc-image.yaml"
-          done
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add helm-values/*-image.yaml
-          git diff --cached --quiet || git commit -m "deploy: $(echo '${{ needs.changes.outputs.services }}' | jq -r 'join(",")') [skip ci]"
-          git push
+          push: false
+          tags: ${{ matrix.service }}-service:${{ github.sha }}

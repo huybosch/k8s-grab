@@ -1,0 +1,26 @@
+# Phase 24 - hạ tầng dùng chung (configmap, ingress, networkpolicy, cronjob, postgres)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: grab-platform
+  namespace: argocd
+  labels:
+    grab-mini/tier: platform
+spec:
+  project: grab-mini
+  source:
+    repoURL: https://github.com/huybosch/k8s-grab.git
+    targetRevision: main
+    path: charts/grab-platform
+    helm:
+      releaseName: grab-platform
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  syncPolicy:
+    automated:
+      # KHÔNG prune: chart này có Postgres + PVC. Lỡ xoá/đổi tên trong Git không được kéo theo xoá dữ liệu.
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

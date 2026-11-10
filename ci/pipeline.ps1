@@ -1,32 +1,30 @@
 <#
-Phase 23 - CI/CD pipeline chạy LOCAL cho Grab Mini
+Phase 24 - pipeline GitOps cho Grab Mini (bản Phase 23 deploy bằng helm: xem git history của file này)
 
-  test -> build (tag = git SHA) -> push (local registry) -> deploy (helm, tự rollback) -> smoke test -> ghi lại (git commit)
+  test -> build (tag = git SHA) -> push (local registry) -> release (commit tag + git push) -> sync (đợi Argo CD) -> smoke test
+                                                                                              lỗi ──► git revert + git push
 
-Cách dùng (trong 1 cửa sổ PowerShell 7, thư mục grab-mini):
+Pipeline KHÔNG còn quyền ghi vào cluster: nó chỉ ghi vào Git. Argo CD (trong cluster) kéo Git về và apply.
+  -> rollback = git revert, không phải helm rollback (helm rollback sẽ bị Argo CD selfHeal đè lại ngay)
+
+Cách dùng (PowerShell 7, thư mục grab-mini):
   ./ci/pipeline.ps1 -Service booking
   ./ci/pipeline.ps1 -Service payment,user,booking
   (KHÔNG dùng "pwsh -File ci/pipeline.ps1 -Service a,b" - với -File, "a,b" là 1 chuỗi, không phải mảng)
 
-Yêu cầu: registry localhost:5001 (container kind-registry), cluster grab-mini, Ingress ở http://localhost.
-Pipeline tương đương trên GitHub Actions: .github/workflows/ci.yaml
+Yêu cầu: registry localhost:5001, Argo CD đã bootstrap (kubectl apply -f argocd/root.yaml), remote origin, Ingress http://localhost.
 #>
 param(
   [Parameter(Mandatory)]
   [ValidateSet("booking", "payment", "user")]
   [string[]]$Service,
   [string]$Registry = "localhost:5001",
-  [string]$Timeout = "3m"
+  [int]$TimeoutSec = 180
 )
 
 $ErrorActionPreference = "Stop"
-$PSNativeCommandUseErrorActionPreference = $true   # lệnh ngoài (git, npm, docker, helm) trả exit code != 0 -> dừng pipeline
+$PSNativeCommandUseErrorActionPreference = $true   # lệnh ngoài (git, npm, docker, kubectl) trả exit code != 0 -> dừng pipeline
 Set-Location (Split-Path $PSScriptRoot -Parent)
-
-# Trả file helm-values/<svc>-image.yaml về bản đã commit (hoặc xoá nếu chưa từng commit)
-function Restore-ImageValues([string]$Path) {
-  if (git ls-files -- $Path) { git checkout -- $Path } else { Remove-Item $Path -ErrorAction SilentlyContinue }
-}
 
 function Invoke-Stage([string]$Name, [scriptblock]$Body) {
   $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -35,8 +33,31 @@ function Invoke-Stage([string]$Name, [scriptblock]$Body) {
   Write-Host ("    OK ({0:N1}s)" -f $sw.Elapsed.TotalSeconds) -ForegroundColor Green
 }
 
-# Smoke test: gọi qua Ingress như người dùng thật. Thử lại vài lần vì ingress-nginx cần vài giây
-# để nhận endpoint mới sau rollout (đã gặp 503 tạm thời ở Phase 19/22).
+# Đợi Argo CD: app đã sync ĐÚNG commit $Revision, Synced + Healthy, và Deployment rollout xong.
+# Không có webhook GitHub -> cluster nên "refresh" chủ động thay vì đợi chu kỳ poll (60s).
+function Wait-ArgoSync([string]$App, [string]$Revision) {
+  kubectl -n argocd annotate application $App argocd.argoproj.io/refresh=normal --overwrite | Out-Null
+  $deadline = (Get-Date).AddSeconds($TimeoutSec); $last = ""
+  while ((Get-Date) -lt $deadline) {
+    $s = (kubectl -n argocd get application $App -o json | ConvertFrom-Json).status
+    $now = "sync={0}@{1} health={2} op={3}" -f $s.sync.status, "$($s.sync.revision)".Substring(0, [Math]::Min(7, "$($s.sync.revision)".Length)), $s.health.status, $s.operationState.phase
+    if ($now -ne $last) { Write-Host "    argocd $App : $now"; $last = $now }
+    if ($s.health.status -eq "Degraded") { throw "Argo CD báo $App Degraded" }
+    # sync.revision = commit Argo CD đang so sánh; Synced ở revision đó = cluster khớp Git của commit đó.
+    # (không đòi operationState.revision: commit không đổi manifest của app này thì Argo CD không chạy sync nào)
+    if ($s.sync.revision -eq $Revision -and $s.sync.status -eq "Synced" -and $s.health.status -eq "Healthy" -and
+        $s.operationState.phase -ne "Running") {
+      # Argo CD có thể báo Healthy 1 nhịp trước khi controller thấy generation mới -> chốt lại bằng rollout status (chỉ đọc)
+      $left = [int]($deadline - (Get-Date)).TotalSeconds
+      kubectl rollout status "deployment/$App" -n default --timeout "$([Math]::Max($left, 1))s" | Out-Null
+      return
+    }
+    Start-Sleep -Seconds 3
+  }
+  throw "Argo CD chưa sync $App về $($Revision.Substring(0,7)) Synced/Healthy sau ${TimeoutSec}s"
+}
+
+# Smoke test: gọi qua Ingress như người dùng thật (retry vì ingress-nginx cần vài giây nhận endpoint mới)
 function Test-Smoke([string]$Svc) {
   $req = switch ($Svc) {
     "user"    { @{ Uri = "http://localhost/users";   Method = "GET";  Expect = "user-service" } }
@@ -58,17 +79,18 @@ foreach ($svc in $Service) {
   $total = [Diagnostics.Stopwatch]::StartNew()
   Write-Host "`n################ $svc-service ################" -ForegroundColor Yellow
 
-  # --- 0. guard: image phải build từ code ĐÃ commit, nếu không tag SHA sẽ nói dối ---
-  $dirty = git status --porcelain -- "$svc-service" charts helm-values
-  if ($dirty) { throw "Có thay đổi chưa commit trong $svc-service/, charts/ hoặc helm-values/:`n$dirty`nCommit trước rồi chạy lại." }
+  # --- 0. guard ---
+  # (a) image phải build từ code ĐÃ commit, nếu không tag SHA sẽ nói dối
+  $dirty = git status --porcelain -- "$svc-service" charts helm-values argocd
+  if ($dirty) { throw "Có thay đổi chưa commit trong $svc-service/, charts/, helm-values/ hoặc argocd/:`n$dirty`nCommit trước rồi chạy lại." }
+  # (b) Git là nguồn sự thật -> code local phải đã có trên origin, và local không được tụt sau origin
+  git fetch -q origin main
+  $behind = [int](git rev-list --count HEAD..origin/main)
+  if ($behind -gt 0) { throw "local main tụt sau origin/main $behind commit -> git pull --rebase trước" }
 
-  # tag = commit cuối cùng ĐỘNG VÀO thư mục service (build context) -> cùng source = cùng tag
   $sha = git log -1 --format=%h --abbrev=12 -- "$svc-service"
   $image = "$Registry/$svc-service:$sha"
   $valuesImage = "helm-values/$svc-image.yaml"
-  $valuesArgs = @("-f", "helm-values/$svc.yaml", "-f", "helm-values/env-prod.yaml")
-  if (Test-Path "helm-values/$svc-prod.yaml") { $valuesArgs += @("-f", "helm-values/$svc-prod.yaml") }
-  $valuesArgs += @("-f", $valuesImage)
   Write-Host "image: $image"
 
   Invoke-Stage "1/6 test" {
@@ -80,57 +102,43 @@ foreach ($svc in $Service) {
     docker build -q -t $image --label "org.opencontainers.image.revision=$sha" "./$svc-service"
   }
 
-  Invoke-Stage "3/6 push" {
+  Invoke-Stage "3/6 push image" {
     docker push -q $image
   }
 
-  # revision đang chạy (null nếu release chưa tồn tại - lần cài đầu trên cluster mới; `helm history` sẽ lỗi)
-  $previous = $null
-  if (helm list -q --filter "^$svc$") {
-    $previous = (helm history $svc -o json | ConvertFrom-Json | Where-Object status -eq "deployed").revision
-  }
-  Invoke-Stage "4/6 deploy" {
+  $deployCommit = $null
+  Invoke-Stage "4/6 release (git)" {
     @"
-# TẠO BỞI ci/pipeline.ps1 - KHÔNG sửa tay. Image đang chạy ở prod cho $svc.
+# TẠO BỞI ci/pipeline.ps1 - KHÔNG sửa tay. Image đang chạy ở prod cho $svc (Argo CD đọc file này).
 image:
   repository: $Registry/$svc-service
   tag: "$sha"
 "@ | Set-Content -Encoding utf8NoBOM $valuesImage
-    try {
-      # --rollback-on-failure: Pod mới không Ready trong $Timeout -> Helm tự rollback về revision trước
-      helm upgrade --install $svc charts/grab-service @valuesArgs --rollback-on-failure --wait --timeout $Timeout
-    } catch {
-      Restore-ImageValues $valuesImage
-      throw "deploy thất bại -> Helm đã tự rollback về revision $previous. $_"
-    }
-    # bỏ qua Pod cũ đang Terminating (có deletionTimestamp)
-    $running = (kubectl get pods -l "app=$svc" -o json | ConvertFrom-Json).items |
-      Where-Object { -not $_.metadata.deletionTimestamp } | ForEach-Object { $_.spec.containers[0].image } | Sort-Object -Unique
-    Write-Host "    Pod đang chạy image: $($running -join ', ')"
-  }
-
-  Invoke-Stage "5/6 smoke test" {
-    try { Test-Smoke $svc }
-    catch {
-      if ($previous) {
-        Write-Host "    smoke test lỗi -> helm rollback $svc $previous" -ForegroundColor Red
-        helm rollback $svc $previous --wait --timeout $Timeout
-      } else {
-        Write-Host "    smoke test lỗi ở lần cài ĐẦU (không có revision để rollback) -> helm uninstall $svc" -ForegroundColor Red
-        helm uninstall $svc --wait
-      }
-      Restore-ImageValues $valuesImage
-      throw
-    }
-  }
-
-  Invoke-Stage "6/6 record" {
-    # Git là nhật ký deploy: commit file chứa tag đang chạy (tiền đề cho GitOps ở Phase 24)
     git add $valuesImage
-    if (git diff --cached --name-only) { git commit -q -m "deploy($svc): $sha"; Write-Host "    commit: $(git log -1 --format='%h %s')" }
-    else { Write-Host "    $valuesImage không đổi (đã deploy đúng tag này từ trước)" }
+    if (git diff --cached --name-only) {
+      git commit -q -m "deploy($svc): $sha"
+      $script:deployCommit = git rev-parse HEAD
+      Write-Host "    commit: $(git log -1 --format='%h %s')"
+    } else { Write-Host "    $valuesImage không đổi (tag này đã ở trong Git)" }
+    git push -q origin HEAD:main   # đẩy cả code (nếu chưa push) lẫn commit deploy
   }
 
-  $rev = (helm history $svc -o json | ConvertFrom-Json | Where-Object status -eq "deployed").revision
-  Write-Host ("DONE {0}: {1} (helm revision {2}, {3:N0}s)" -f $svc, $image, $rev, $total.Elapsed.TotalSeconds) -ForegroundColor Green
+  try {
+    Invoke-Stage "5/6 sync (Argo CD)" { Wait-ArgoSync $svc (git rev-parse HEAD) }
+    Invoke-Stage "6/6 smoke test" { Test-Smoke $svc }
+  } catch {
+    $err = $_
+    if ($deployCommit) {
+      # Rollback kiểu GitOps: commit ngược lại commit deploy -> Argo CD sync về tag cũ
+      Write-Host "    LỖI: $err`n    -> git revert $($deployCommit.Substring(0,7)) + push, đợi Argo CD đưa về tag cũ" -ForegroundColor Red
+      git revert --no-edit $deployCommit | Out-Null
+      git push -q origin HEAD:main
+      Wait-ArgoSync $svc (git rev-parse HEAD)
+      Test-Smoke $svc
+      Write-Host "    đã rollback: $(git log -1 --format='%h %s')" -ForegroundColor Yellow
+    }
+    throw "deploy $svc thất bại: $err"
+  }
+
+  Write-Host ("DONE {0}: {1} (git {2}, {3:N0}s)" -f $svc, $image, (git rev-parse --short HEAD), $total.Elapsed.TotalSeconds) -ForegroundColor Green
 }
