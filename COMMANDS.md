@@ -2471,6 +2471,18 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 | Resource tạo bằng `kubectl` → `helm install` bị từ chối (`invalid ownership metadata`); dùng `kubectl diff` rồi `--take-ownership` | [22](#scenario-22) |
 | Có HPA thì chart không khai báo `spec.replicas`; Helm 4 (server-side apply) không đụng field nó không sở hữu - `kubectl diff` vẫn báo sai `replicas 2 → 1` | [22](#scenario-22) |
 | Xung đột SSA ở field atomic (`volumeClaimTemplates`) → `--force-conflicts` chỉ sau khi `--dry-run=server` thành công | [22](#scenario-22) |
+| Adopt bằng `--take-ownership` để lại manager cũ `kubectl-client-side-apply` → lần đầu ĐỔI giá trị (image) bị conflict → dọn `managedFields` 1 lần | [23](#scenario-23) |
+
+**CI/CD**
+
+| Bài học | Scenario |
+|---|---|
+| Tag = git SHA (commit cuối động vào thư mục service) → image bất biến, `helm rollback` chạy lại đúng bản cũ; `git revert` vẫn ra tag mới | [23](#scenario-23) |
+| Test chặn lỗi logic trước khi build; lỗi đóng gói (Dockerfile) qua được test → readiness + `--rollback-on-failure` + `maxUnavailable: 0` giữ 0 request lỗi | [23](#scenario-23) |
+| `helm upgrade` tay thiếu `-f helm-values/<svc>-image.yaml` = quay về image cũ → deploy chỉ qua `ci/pipeline.ps1` | [23](#scenario-23) |
+| Local registry trên kind: containerd mặc định `config_path = ''` → phải bật + `hosts.toml` trên mọi node | [23](#scenario-23) |
+| `/tmp` của node kind là tmpfs - `docker cp` vào đó không thấy được; test script idempotent phải xoá trạng thái cũ trước | [23](#scenario-23) |
+| `$PSNativeCommandUseErrorActionPreference`: lệnh dọn dẹp trong `catch` cũng ném lỗi; `helm history` của release chưa có cũng lỗi → kiểm tra trước | [23](#scenario-23) |
 
 **PowerShell / Windows**
 
@@ -2488,10 +2500,16 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 **App**
 - `driver-service`, `notification-service`: mới có image `:v1`, chưa có values Helm (`helm-values/driver.yaml`, `notification.yaml`), chưa có route Ingress, chưa có `/metrics`.
 - `booking`/`payment` chưa thật sự query Postgres (mới có hạ tầng + `DB_*` env).
-- Image `booking-service:v2`/`:v3` (lab rollback Phase 7-8) là bản cũ - không có `/metrics`, không có timeout gọi `payment`.
+- Image `<svc>-service:v1/v2/v3` (bản `kind load` cũ của Phase 2-21) vẫn còn trên node + Docker Desktop nhưng không còn dùng - prod chạy `localhost:5001/<svc>-service:<sha>`.
+
+**CI/CD**
+- Pipeline mới chạy **local**; `.github/workflows/ci.yaml` chưa chạy (chưa có repo GitHub, chưa có remote). Pipeline chưa chạy thử trường hợp cài **lần đầu** (release chưa tồn tại) - code đã xử lý nhưng chưa verify.
+- Test chạy trên host, chưa chạy **bên trong** image vừa build (bỏ sót lỗi kiểu Demo C tới tận lúc deploy); chưa scan lỗ hổng image (Trivy...).
+- Chưa có môi trường staging trong pipeline (deploy thẳng prod), chưa có bước chờ duyệt (approval).
+- Registry không có volume: xoá container `kind-registry` = mất mọi image (kể cả bản đang chạy). Registry còn image rác (`registry-test`, `booking-service:989561244027` của Demo C) - `registry:2` mặc định tắt API xoá.
+- Chạy lại pipeline với tag không đổi vẫn tạo thêm 1 revision Helm (không có Pod nào đổi).
 
 **Vận hành**
-- Tag image còn thay đổi được (`:v1` bị build đè) → Phase 23 chuyển sang tag theo git SHA.
 - `booking-secret` tạo tay → cân nhắc Sealed Secrets / External Secrets.
 - `ingress-nginx` và `metrics-server` cài từ URL `main` / `latest`, chưa pin version.
 - Postgres dùng `local-path` (1 node) - chưa có replication/backup.
@@ -2505,4 +2523,4 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 - Runbook [🔁 Dựng lại toàn bộ cluster](#rebuild) chưa chạy trọn vẹn 1 lần liên tục.
 
 **Roadmap**
-- Phase 23 (CI/CD), Phase 24 (GitOps / Argo CD), Final Project, Production Simulation (Incident 1-7).
+- Phase 24 (GitOps / Argo CD), Final Project, Production Simulation (Incident 1-7).
