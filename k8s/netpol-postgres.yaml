@@ -1,0 +1,22 @@
+# Phase 20 - chỉ booking + payment được kết nối tới postgres:5432, mọi Pod khác (kể cả user) bị chặn
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-booking-payment-to-postgres
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: booking
+        - podSelector:
+            matchLabels:
+              app: payment
+      ports:
+        - protocol: TCP
+          port: 5432

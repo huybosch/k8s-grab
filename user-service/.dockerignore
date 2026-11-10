@@ -1,0 +1,6 @@
+# Phase 23 - không copy node_modules của máy host (npm ci trong image), không đưa test vào image
+node_modules
+*.test.js
+npm-debug.log
+Dockerfile
+.dockerignore

@@ -1,0 +1,8 @@
+# Môi trường PROD (namespace default, cluster grab-mini) - HA đầy đủ của Phase 10-19
+replicaCount: 3
+topologySpread:
+  enabled: true
+nodeFailureTolerationSeconds: 30
+pdb:
+  enabled: true
+  maxUnavailable: 1

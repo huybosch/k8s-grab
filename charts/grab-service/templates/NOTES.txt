@@ -1,0 +1,8 @@
+{{ .Values.app }} ({{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}) đã deploy vào namespace {{ .Release.Namespace }}.
+  Service: {{ include "grab-service.serviceName" . }}:{{ .Values.service.port }} -> container :{{ .Values.containerPort }}
+{{- if .Values.autoscaling.enabled }}
+  HPA: {{ .Values.autoscaling.minReplicas }}-{{ .Values.autoscaling.maxReplicas }} replicas (CPU {{ .Values.autoscaling.targetCPUUtilizationPercentage }}%)
+{{- else }}
+  Replicas: {{ .Values.replicaCount }}
+{{- end }}
+Kiểm tra: kubectl get deploy,svc,pdb,hpa -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}

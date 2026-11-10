@@ -1,0 +1,119 @@
+{{- if .Values.networkPolicies.enabled }}
+{{- $np := .Values.networkPolicies }}
+# Phase 20 - chặn MỌI ingress traffic vào MỌI Pod trong namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  labels:
+    {{- include "grab-platform.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# Phase 20 - ingress-nginx controller -> 3 app
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-nginx-to-apps
+  labels:
+    {{- include "grab-platform.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: ["user", "booking", "payment"]
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.ingressControllerNamespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: controller
+      ports:
+        {{- range $np.appPorts }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+---
+# Phase 20 - booking -> payment
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-booking-to-payment
+  labels:
+    {{- include "grab-platform.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: payment
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: booking
+      ports:
+        - protocol: TCP
+          port: 3004
+---
+# Phase 20 - chỉ booking + payment vào được postgres
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-booking-payment-to-postgres
+  labels:
+    {{- include "grab-platform.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: booking
+        - podSelector:
+            matchLabels:
+              app: payment
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+# Phase 21 - Prometheus (namespace monitoring) scrape /metrics
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-scrape
+  labels:
+    {{- include "grab-platform.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: ["user", "booking", "payment"]
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.monitoringNamespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        {{- range $np.appPorts }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+{{- end }}

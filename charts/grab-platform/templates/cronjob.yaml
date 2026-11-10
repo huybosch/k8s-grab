@@ -1,0 +1,20 @@
+{{- if .Values.settlement.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Values.settlement.name }}
+  labels:
+    {{- include "grab-platform.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.settlement.schedule | quote }}
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: settlement
+              image: {{ .Values.settlement.image }}
+              imagePullPolicy: IfNotPresent
+              command: ["node", "-e", "console.log('running settlement...'); setTimeout(() => console.log('done'), 2000)"]
+          restartPolicy: OnFailure
+{{- end }}

@@ -1,0 +1,8 @@
+# payment-service - giá trị riêng của service
+app: payment
+image:
+  repository: payment-service
+containerPort: 3004
+preferredAntiAffinity: true   # Phase 19 - ví dụ soft anti-affinity
+probes:
+  enabled: true            # Phase 22 - bật probe (trước đây payment không có)

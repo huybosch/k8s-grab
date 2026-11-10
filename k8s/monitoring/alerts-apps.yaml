@@ -1,0 +1,50 @@
+# Phase 21 (alert) - alert rule cho Grab Mini. Prometheus Operator tự nạp (ruleSelectorNilUsesHelmValues: false)
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: grab-mini-alerts
+  namespace: monitoring
+spec:
+  groups:
+    - name: grab-mini.rules
+      rules:
+        - alert: GrabMiniHighErrorRate
+          expr: |
+            sum by (job) (rate(http_requests_total{job=~"booking-service|payment-service|user-service",status=~"5.."}[1m]))
+              /
+            sum by (job) (rate(http_requests_total{job=~"booking-service|payment-service|user-service"}[1m]))
+              > 0.05
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ $labels.job }}: error rate {{ $value | humanizePercentage }} (> 5%)"
+        - alert: GrabMiniHighLatencyP95
+          expr: |
+            histogram_quantile(0.95, sum by (job, le) (rate(http_request_duration_seconds_bucket{job=~"booking-service|payment-service|user-service"}[1m])))
+              > 1
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.job }}: p95 latency {{ $value | humanizeDuration }} (> 1s)"
+        - alert: GrabMiniNoPodsAvailable
+          expr: kube_deployment_status_replicas_available{namespace="default",deployment=~"booking|payment|user"} == 0
+          for: 30s
+          labels:
+            severity: critical
+          annotations:
+            summary: "Deployment {{ $labels.deployment }} không còn Pod available nào"
+        - alert: GrabMiniPodRestarting
+          expr: increase(kube_pod_container_status_restarts_total{namespace="default",pod=~"(booking|payment|user)-.*"}[10m]) > 2
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pod {{ $labels.pod }} restart {{ $value | humanize }} lần trong 10 phút"
+        - alert: GrabMiniTargetDown
+          expr: up{job=~"booking-service|payment-service|user-service"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Prometheus không scrape được {{ $labels.pod }} ({{ $labels.job }})"

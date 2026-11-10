@@ -1,0 +1,22 @@
+{{- if .Values.pdb.enabled }}
+{{- $hasMin := not (kindIs "invalid" .Values.pdb.minAvailable) }}
+{{- $hasMax := not (kindIs "invalid" .Values.pdb.maxUnavailable) }}
+{{- if and $hasMin $hasMax }}
+{{- fail "pdb: chỉ khai báo minAvailable HOẶC maxUnavailable, không cả hai (đặt cái còn lại = null)" }}
+{{- end }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Values.app }}-pdb
+  labels:
+    {{- include "grab-service.labels" . | nindent 4 }}
+spec:
+  {{- if $hasMin }}
+  minAvailable: {{ .Values.pdb.minAvailable }}
+  {{- else }}
+  maxUnavailable: {{ default 1 .Values.pdb.maxUnavailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "grab-service.selectorLabels" . | nindent 6 }}
+{{- end }}

@@ -1,0 +1,66 @@
+# Giá trị MẶC ĐỊNH cho mọi service. Mỗi service override trong helm-values/<service>.yaml,
+# mỗi môi trường override trong helm-values/env-<dev|staging|prod>.yaml
+#
+#   helm upgrade --install booking charts/grab-service \
+#     -f helm-values/booking.yaml -f helm-values/env-prod.yaml -f helm-values/booking-prod.yaml
+# (file sau ghi đè file trước)
+
+# app = tên Deployment + label "app" (selector - KHÔNG đổi được sau khi tạo Deployment)
+app: ""
+# tên Service (để trống = "<app>-service")
+serviceName: ""
+
+image:
+  repository: ""
+  tag: ""                 # để trống = .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+containerPort: 3000
+
+env: {}                   # map NAME: value -> env
+envFrom: []               # ví dụ: [{configMapRef: {name: booking-config}}]
+
+resources: {}
+
+probes:
+  enabled: false
+  path: /health
+  readiness:
+    initialDelaySeconds: 3
+    periodSeconds: 5
+  liveness:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+
+terminationGracePeriodSeconds: null
+preStopSleepSeconds: 0    # > 0 -> lifecycle.preStop sleep N giây (Phase 12)
+
+# Phase 18 - trải đều Pod qua node
+topologySpread:
+  enabled: false
+  maxSkew: 1
+
+# Phase 19 - failover nhanh khi node chết (null = dùng mặc định 300s của Kubernetes)
+nodeFailureTolerationSeconds: null
+
+# Phase 19 - soft anti-affinity
+preferredAntiAffinity: false
+
+# Phase 19 - PodDisruptionBudget (chỉ khai báo 1 trong 2)
+pdb:
+  enabled: false
+  minAvailable: null
+  maxUnavailable: null
+
+# Phase 11 - HPA. Khi bật, Deployment KHÔNG khai báo spec.replicas (để HPA quản lý)
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 50
+
+service:
+  port: 80
+  labels:
+    monitoring: enabled   # Phase 21 - ServiceMonitor chọn theo label này

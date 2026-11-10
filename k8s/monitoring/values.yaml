@@ -1,0 +1,64 @@
+# Phase 21 - values cho kube-prometheus-stack trên kind
+# helm upgrade --install monitoring prometheus-community/kube-prometheus-stack --version 93.1.1 \
+#   -n monitoring --create-namespace -f k8s/monitoring/values.yaml --wait
+
+prometheus:
+  prometheusSpec:
+    # Mặc định Prometheus CHỈ nhận ServiceMonitor có label release=monitoring (của chính chart).
+    # false = nhận MỌI ServiceMonitor/PodMonitor/PrometheusRule trong cluster (của mình tự viết)
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    scrapeInterval: 15s
+    retention: 2d
+
+# kind: các component control-plane chỉ bind metrics trên 127.0.0.1 -> Prometheus (trong Pod)
+# không scrape được -> target "down" + alert TargetDown. Tắt đi (cách khác: sửa kubeadmConfigPatches
+# bind-address 0.0.0.0 rồi tạo lại cluster).
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+# Phase 21 (logs) - thêm Loki làm datasource cho Grafana (uid cố định để dashboard tham chiếu)
+grafana:
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      uid: loki
+      url: http://loki.monitoring.svc:3100
+      access: proxy
+
+# Phase 21 (alert) - route alert GrabMini* tới webhook (thực tế: Slack/Telegram/PagerDuty...)
+# CHÚ Ý: khai báo alertmanager.config là THAY THẾ toàn bộ config mặc định của chart -> phải tự giữ
+# route Watchdog -> null + inhibit_rules
+alertmanager:
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: "null"
+      group_by: ["alertname", "job", "deployment"]
+      group_wait: 10s
+      group_interval: 30s
+      repeat_interval: 4h
+      routes:
+        - receiver: "null"
+          matchers: ['alertname = "Watchdog"']
+        - receiver: grab-mini-webhook
+          matchers: ['alertname =~ "GrabMini.*"']
+    receivers:
+      - name: "null"
+      - name: grab-mini-webhook
+        webhook_configs:
+          - url: http://alert-webhook.monitoring.svc/
+            send_resolved: true
+    inhibit_rules:
+      # đã có critical thì không cần gửi warning cùng job
+      - source_matchers: ['severity = "critical"']
+        target_matchers: ['severity = "warning"']
+        equal: ["job"]

@@ -1,0 +1,9 @@
+# grab-platform ở DEV (namespace grab-dev) - Ingress theo host riêng để không đè route của prod
+#   curl -H "Host: dev.grab.local" http://localhost/users
+ingress:
+  name: grab-mini-ingress-dev
+  host: dev.grab.local
+settlement:
+  enabled: false           # dev không cần chạy settlement hằng đêm
+postgres:
+  password: dev-only

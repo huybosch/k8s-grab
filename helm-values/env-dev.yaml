@@ -1,0 +1,11 @@
+# Môi trường DEV - 1 replica, không HA, không PDB/HPA (tiết kiệm tài nguyên, deploy nhanh)
+replicaCount: 1
+topologySpread:
+  enabled: false
+nodeFailureTolerationSeconds: null
+preferredAntiAffinity: false
+pdb:
+  enabled: false
+autoscaling:
+  enabled: false
+resources: {}

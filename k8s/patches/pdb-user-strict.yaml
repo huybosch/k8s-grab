@@ -1,0 +1,4 @@
+# Phase 19 - Lab B1: PDB quá chặt, CHỈ để demo drain bị chặn. Revert: kubectl apply -f k8s/pdb.yaml
+# kubectl patch pdb user-pdb --type=merge --patch-file k8s/patches/pdb-user-strict.yaml
+spec:
+  maxUnavailable: 0

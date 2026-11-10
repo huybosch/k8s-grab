@@ -1,0 +1,39 @@
+# Phase 21 (logs) - Loki chế độ SingleBinary, lưu filesystem (PVC local-path) - CHỈ cho lab
+# helm upgrade --install loki grafana/loki --version 7.5.0 -n monitoring -f k8s/monitoring/loki-values.yaml --wait
+deploymentMode: SingleBinary
+
+loki:
+  auth_enabled: false            # 1 tenant duy nhất, không cần header X-Scope-OrgID
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+  schemaConfig:
+    configs:
+      - from: "2024-01-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: loki_index_
+          period: 24h
+  limits_config:
+    retention_period: 48h
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+
+singleBinary:
+  replicas: 1
+  persistence:
+    size: 2Gi
+
+# tắt các thành phần của chế độ SimpleScalable/Distributed + cache (tốn RAM, không cần cho lab)
+backend: { replicas: 0 }
+read: { replicas: 0 }
+write: { replicas: 0 }
+chunksCache: { enabled: false }
+resultsCache: { enabled: false }
+lokiCanary: { enabled: false }
+test: { enabled: false }
+gateway: { enabled: false }

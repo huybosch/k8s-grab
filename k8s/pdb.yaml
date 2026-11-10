@@ -1,0 +1,31 @@
+# Phase 19 - PodDisruptionBudget: giới hạn số Pod bị evict CÙNG LÚC khi drain/upgrade node
+# (chỉ áp dụng cho "voluntary disruption" - drain, eviction API; KHÔNG chặn được node chết thật)
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: booking-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: booking
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: payment-pdb
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: payment
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: user-pdb
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: user

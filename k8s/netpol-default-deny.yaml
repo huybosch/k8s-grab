@@ -1,0 +1,10 @@
+# Phase 20 - zero-trust: chặn MỌI ingress traffic vào MỌI Pod trong namespace default
+# (podSelector rỗng = chọn tất cả Pod). Sau đó mở từng đường cần thiết bằng netpol-allow.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress

@@ -1,0 +1,7 @@
+# user-service - giá trị riêng của service
+app: user
+image:
+  repository: user-service
+containerPort: 3001
+probes:
+  enabled: true            # Phase 22 - bật probe (trước đây user không có)

@@ -1,0 +1,45 @@
+# grab-platform - mặc định = đúng cấu hình PROD đang chạy (namespace default)
+#   prod: helm upgrade --install grab-platform charts/grab-platform
+#   dev : helm upgrade --install grab-platform charts/grab-platform -n grab-dev -f helm-values/platform-dev.yaml
+# Secret booking-secret KHÔNG nằm trong chart (không commit password vào Git) - vẫn tạo bằng
+#   kubectl create secret generic booking-secret -n <ns> --from-literal=DB_USERNAME=... --from-literal=DB_PASSWORD=...
+
+bookingConfig:
+  name: booking-config
+  data:
+    DB_HOST: "postgres"
+    DB_PORT: "5432"
+    DB_NAME: "grabmini"
+
+ingress:
+  enabled: true
+  name: grab-mini-ingress
+  className: nginx
+  host: ""                 # "" = mọi host (prod). Dev dùng host riêng để không đụng route của prod
+  routes:
+    - path: /users
+      service: user-service
+    - path: /booking
+      service: booking-service
+    - path: /payment
+      service: payment-service
+
+# Phase 20 + 21 - zero-trust
+networkPolicies:
+  enabled: true
+  appPorts: [3001, 3003, 3004]
+  ingressControllerNamespace: ingress-nginx
+  monitoringNamespace: monitoring
+
+settlement:
+  enabled: true
+  name: settlement-job
+  schedule: "0 0 * * *"
+  image: booking-service:v1
+
+postgres:
+  enabled: true
+  image: postgres:16-alpine
+  database: grabmini
+  password: change-me      # CHỈ cho lab - production dùng Secret / External Secrets
+  storage: 1Gi

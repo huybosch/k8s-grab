@@ -1,0 +1,16 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: settlement-job
+spec:
+  schedule: "0 0 * * *"      # chạy 00:00 hằng ngày
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: settlement
+              image: booking-service:v1
+              imagePullPolicy: IfNotPresent
+              command: ["node", "-e", "console.log('running settlement...'); setTimeout(() => console.log('done'), 2000)"]
+          restartPolicy: OnFailure

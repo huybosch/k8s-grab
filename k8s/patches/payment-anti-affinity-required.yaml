@@ -1,0 +1,12 @@
+# Phase 19 - Lab A: hard anti-affinity (demo, KHÔNG dùng lâu dài)
+# kubectl patch deployment payment --patch-file k8s/patches/payment-anti-affinity-required.yaml
+spec:
+  template:
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: payment
+              topologyKey: kubernetes.io/hostname

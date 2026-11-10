@@ -1,0 +1,16 @@
+# booking-service - giá trị riêng của service (không phụ thuộc môi trường)
+app: booking
+image:
+  repository: booking-service
+containerPort: 3003
+env:
+  VERSION: v1
+envFrom:
+  - configMapRef:
+      name: booking-config
+  - secretRef:
+      name: booking-secret
+probes:
+  enabled: true
+terminationGracePeriodSeconds: 30
+preStopSleepSeconds: 5      # booking có SIGTERM handler + /slow (Phase 12)

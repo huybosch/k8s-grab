@@ -1,0 +1,53 @@
+# Phase 21 (alert) - "receiver" giả lập: nhận webhook từ Alertmanager và in ra log
+# (thay cho Slack/Telegram/PagerDuty - log này cũng đi vào Loki qua Alloy)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alert-webhook
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alert-webhook
+  template:
+    metadata:
+      labels:
+        app: alert-webhook
+    spec:
+      containers:
+        - name: webhook
+          image: node:20-alpine
+          command: ["node", "-e"]
+          args:
+            - |
+              require("http").createServer((req, res) => {
+                let body = "";
+                req.on("data", (c) => (body += c));
+                req.on("end", () => {
+                  try {
+                    const m = JSON.parse(body);
+                    for (const a of m.alerts) {
+                      console.log(`ALERT ${a.status.toUpperCase()} ${a.labels.alertname} severity=${a.labels.severity} | ${a.annotations.summary || ""}`);
+                    }
+                  } catch (e) { console.log("bad payload", e.message); }
+                  res.end("ok");
+                });
+              }).listen(8080, () => console.log("alert-webhook listening on 8080"));
+          ports:
+            - containerPort: 8080
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alert-webhook
+  namespace: monitoring
+spec:
+  selector:
+    app: alert-webhook
+  ports:
+    - port: 80
+      targetPort: 8080

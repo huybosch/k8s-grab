@@ -1,0 +1,54 @@
+# Phase 20 - mở từng đường traffic cần thiết (đi kèm netpol-default-deny.yaml + netpol-postgres.yaml)
+#
+#   Internet -> ingress-nginx -> user / booking / payment
+#                                booking -> payment
+#                                booking, payment -> postgres   (netpol-postgres.yaml)
+#
+# 1) ingress-nginx controller -> 3 service HTTP
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-nginx-to-apps
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: ["user", "booking", "payment"]
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:          # CÙNG 1 phần tử với namespaceSelector = AND (đúng ns VÀ đúng pod)
+            matchLabels:
+              app.kubernetes.io/component: controller
+      ports:
+        - protocol: TCP
+          port: 3001
+        - protocol: TCP
+          port: 3003
+        - protocol: TCP
+          port: 3004
+---
+# 2) booking -> payment (service-to-service)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-booking-to-payment
+spec:
+  podSelector:
+    matchLabels:
+      app: payment
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: booking
+      ports:
+        - protocol: TCP
+          port: 3004

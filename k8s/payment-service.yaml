@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-service
+  labels:
+    monitoring: enabled
+spec:
+  selector:
+    app: payment
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3004

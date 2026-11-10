@@ -1,0 +1,16 @@
+# Override riêng cho booking ở PROD (khác với service khác): resources + HPA + PDB minAvailable
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 50
+pdb:
+  minAvailable: 1
+  maxUnavailable: null

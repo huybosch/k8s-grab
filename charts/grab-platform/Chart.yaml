@@ -1,0 +1,6 @@
+apiVersion: v2
+name: grab-platform
+description: Phần dùng chung của Grab Mini trong 1 namespace - ConfigMap, Ingress, NetworkPolicy, CronJob, PostgreSQL
+type: application
+version: 0.1.0
+appVersion: "v1"

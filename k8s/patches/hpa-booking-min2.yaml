@@ -1,0 +1,4 @@
+# Phase 19: HA cần tối thiểu 2 replica (tránh xung đột với booking-pdb minAvailable 1)
+# kubectl patch hpa booking --patch-file k8s/patches/hpa-booking-min2.yaml
+spec:
+  minReplicas: 2

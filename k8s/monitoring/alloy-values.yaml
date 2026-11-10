@@ -1,0 +1,75 @@
+# Phase 21 (logs) - Grafana Alloy (DaemonSet) đọc log container trên MỖI node rồi đẩy vào Loki
+# (Promtail đã EOL - Alloy là collector thay thế chính thức)
+# helm upgrade --install alloy grafana/alloy --version 1.15.0 -n monitoring -f k8s/monitoring/alloy-values.yaml --wait
+controller:
+  type: daemonset
+  # chạy cả trên control-plane (có taint NoSchedule) - ingress-nginx nằm ở đó
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+alloy:
+  mounts:
+    varlog: true                 # mount /var/log của node (chứa /var/log/pods/...)
+  configMap:
+    content: |
+      // 1) tìm mọi Pod chạy trên CHÍNH node này
+      discovery.kubernetes "pods" {
+        role = "pod"
+        selectors {
+          role  = "pod"
+          field = "spec.nodeName=" + coalesce(sys.env("HOSTNAME"), constants.hostname)
+        }
+      }
+
+      // 2) gắn label namespace/pod/container/app + đường dẫn file log
+      discovery.relabel "pods" {
+        targets = discovery.kubernetes.pods.targets
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          target_label  = "app"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_node_name"]
+          target_label  = "node"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_uid", "__meta_kubernetes_pod_container_name"]
+          separator     = "/"
+          target_label  = "__path__"
+          replacement   = "/var/log/pods/*$1/*.log"
+        }
+      }
+
+      local.file_match "pods" {
+        path_targets = discovery.relabel.pods.output
+      }
+
+      // 3) đọc file log, bóc định dạng CRI (timestamp stream flags message) rồi gửi Loki
+      loki.source.file "pods" {
+        targets    = local.file_match.pods.targets
+        forward_to = [loki.process.cri.receiver]
+      }
+
+      loki.process "cri" {
+        stage.cri {}
+        forward_to = [loki.write.default.receiver]
+      }
+
+      loki.write "default" {
+        endpoint {
+          url = "http://loki.monitoring.svc:3100/loki/api/v1/push"
+        }
+      }

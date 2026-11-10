@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-service
+  labels:
+    monitoring: enabled
+spec:
+  selector:
+    app: user
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3001

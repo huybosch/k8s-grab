@@ -1,0 +1,8 @@
+# Môi trường STAGING - giống prod nhưng nhỏ hơn
+replicaCount: 2
+topologySpread:
+  enabled: true
+nodeFailureTolerationSeconds: 30
+pdb:
+  enabled: true
+  maxUnavailable: 1

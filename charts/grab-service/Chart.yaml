@@ -1,0 +1,6 @@
+apiVersion: v2
+name: grab-service
+description: Chart dùng chung cho các microservice Node.js của Grab Mini (booking / payment / user)
+type: application
+version: 0.1.0        # version của CHART (đổi khi sửa template)
+appVersion: "v1"      # version của APP (mặc định cho image.tag)
