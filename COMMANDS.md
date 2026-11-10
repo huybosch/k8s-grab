@@ -2219,6 +2219,117 @@ postgres:
 
 ---
 
+<a id="scenario-23"></a>
+## Scenario 23 - CI/CD: pipeline local + local registry + tag theo git SHA (Phase 23)
+
+```text
+git commit ──► ci/pipeline.ps1 -Service <svc>
+                 1 test    npm ci + node --test (dừng ở đây nếu test fail - không build gì)
+                 2 build   docker build -t localhost:5001/<svc>-service:<git-sha>
+                 3 push    docker push -> registry:2 (container kind-registry, cùng mạng Docker "kind")
+                 4 deploy  ghi helm-values/<svc>-image.yaml + helm upgrade --rollback-on-failure --wait
+                 5 smoke   gọi qua Ingress như người dùng thật; lỗi -> helm rollback
+                 6 record  git commit "deploy(<svc>): <sha>"  (Git = nhật ký deploy, tiền đề GitOps Phase 24)
+```
+
+Đã chọn chạy **local** (không đẩy code lên GitHub): runner của GitHub không vào được cluster `kind` trên máy cá nhân. Bản GitHub Actions tương đương nằm ở `.github/workflows/ci.yaml` (chưa chạy).
+
+```powershell
+cd D:\OBsidian\NUO3HC\Kubernetes\grab-mini
+
+# --- Bước 1: local registry, nối vào mạng của kind ---
+docker run -d --restart=always -p 127.0.0.1:5001:5000 --name kind-registry registry:2.8.3
+docker network connect kind kind-registry
+curl.exe -s http://localhost:5001/v2/_catalog
+
+# --- Bước 2: containerd trên từng node đọc certs.d (mặc định config_path = '' -> bỏ qua hosts.toml) ---
+# làm LẦN LƯỢT từng node, restart containerd không giết container đang chạy
+foreach ($n in "grab-mini-worker","grab-mini-worker2","grab-mini-control-plane") {
+  docker exec $n sh -c 'grep -q certs.d /etc/containerd/config.toml || printf "\n[plugins.\"io.containerd.grpc.v1.cri\".registry]\n  config_path = \"/etc/containerd/certs.d\"\n" >> /etc/containerd/config.toml; mkdir -p /etc/containerd/certs.d/localhost:5001; printf "[host.\"http://kind-registry:5000\"]\n" > /etc/containerd/certs.d/localhost:5001/hosts.toml; systemctl restart containerd'
+  kubectl wait --for=condition=Ready "node/$n" --timeout=90s
+}
+kubectl apply -f k8s/local-registry-hosting.yaml          # ConfigMap chuẩn KEP-1755 (tuỳ chọn)
+
+# kiểm tra cluster pull được từ registry
+docker tag user-service:v1 localhost:5001/registry-test:1; docker push localhost:5001/registry-test:1
+kubectl run registry-test --image=localhost:5001/registry-test:1 --restart=Never --command -- node -e "console.log('ok')"
+kubectl get events --field-selector involvedObject.name=registry-test | Select-String Pull   # Pulling -> Pulled
+kubectl delete pod registry-test
+
+# --- Bước 3: test + git ---
+foreach ($s in "booking","payment","user") { Push-Location "$s-service"; npm test; Pop-Location }   # 10/10 pass
+git init -b main; git add -A; git commit -m "snapshot"        # repo LOCAL, không có remote
+
+# --- Bước 4: dọn field manager cũ (1 lần, xem bài học #1) ---
+./ci/migrate-field-managers.ps1 -Release payment,user,booking,grab-platform -DryRun
+./ci/migrate-field-managers.ps1 -Release payment,user,booking,grab-platform
+
+# --- Bước 5: chạy pipeline (nên chạy kèm traffic loop của Scenario 18 ở terminal khác) ---
+./ci/pipeline.ps1 -Service payment
+./ci/pipeline.ps1 -Service user,booking
+helm list; Get-Content helm-values/*-image.yaml; git log --oneline -5
+
+# --- Demo A: tính năng mới ---
+#   sửa booking-service/server.js (+ test) -> git commit
+./ci/pipeline.ps1 -Service booking
+
+# --- Demo B: bug bị test chặn -> pipeline dừng ở stage 1, không build/push/deploy ---
+#   đổi res.status(503) -> res.status(500) -> git commit
+./ci/pipeline.ps1 -Service booking      # "not ok 3 ... expected: 503, actual: 500"
+git revert --no-edit HEAD
+
+# --- Demo C: bug qua được test nhưng chết trên cluster -> Helm tự rollback ---
+#   Dockerfile: CMD ["node", "server.jss"] -> git commit
+./ci/pipeline.ps1 -Service booking -Timeout 60s   # "UPGRADE FAILED ... has been rolled back due to rollback-on-failure"
+helm history booking                               # failed -> "Rollback to N"
+git revert --no-edit HEAD
+```
+
+**📄 Code liên quan:**
+
+- `ci/pipeline.ps1` (mới) - 6 stage như sơ đồ trên. Điểm chính: `$PSNativeCommandUseErrorActionPreference = $true` (lệnh ngoài trả exit code ≠ 0 → dừng ngay); guard "phải commit trước" (`git status --porcelain -- <svc>-service charts helm-values`); tag = `git log -1 --format=%h --abbrev=12 -- <svc>-service` (commit cuối **động vào thư mục service**, nên cùng source = cùng tag); smoke test thử lại 10 lần × 3s (ingress-nginx cần vài giây nhận endpoint mới); lỗi ở deploy/smoke → trả `helm-values/<svc>-image.yaml` về bản đã commit.
+- `ci/migrate-field-managers.ps1` (mới) - với mọi object của các release: merge patch `metadata.managedFields` = danh sách đã bỏ `kubectl-client-side-apply`, `kubectl-patch`, `kubectl-autoscale` + xoá annotation `last-applied-configuration`. Có `-DryRun` (`--dry-run=server`).
+- `helm-values/<svc>-image.yaml` (mới, **do pipeline tạo** - không sửa tay):
+
+  ```yaml
+  # TẠO BỞI ci/pipeline.ps1 - KHÔNG sửa tay. Image đang chạy ở prod cho booking.
+  image:
+    repository: localhost:5001/booking-service
+    tag: "5f5a024b8892"
+  ```
+
+- `<svc>-service/server.js` - `module.exports = app` + chỉ `app.listen()` khi `require.main === module` (để test `require` được mà không mở port thật). `booking` thêm `PAYMENT_URL` (đọc mỗi request - test trỏ sang payment giả) và `bookingId: randomUUID()` (Demo A).
+- `<svc>-service/server.test.js` (mới) - `node:test` + `fetch`, không thêm dependency. `booking` (4 test): `/health`; `/booking` với payment **giả** (HTTP server trong test) → 200 + `bookingId`; payment không kết nối được → **503 trong < 2s**; `/metrics` có counter `route="/booking"` status 200 và 503, không có `/health`. `payment`, `user`: 3 test mỗi service.
+- `<svc>-service/package.json`: `"test": "node --test"`. `Dockerfile`: `npm ci --omit=dev` (đúng lockfile). `.dockerignore` (mới): bỏ `node_modules` của máy host và `*.test.js` khỏi image.
+- `kind-multi-node.yaml`: thêm `containerdConfigPatches` (`config_path = "/etc/containerd/certs.d"`) cho lần tạo cluster sau.
+- `.github/workflows/ci.yaml` (mới, chưa chạy): `changes` (`dorny/paths-filter` - service nào đổi) → `build` (matrix: test → build → push GHCR chỉ khi push `main`; PR chỉ test + build) → `record` (1 job commit mọi `helm-values/<svc>-image.yaml`, `[skip ci]`). Không có job deploy - để Argo CD (Phase 24) làm.
+- `.gitignore` (`node_modules/`), `.gitattributes` (`* text=auto eol=lf` - Windows `core.autocrlf=true` sẽ đổi YAML/JS sang CRLF).
+
+**✅ Kết quả thật đã verify (11/11/2026):**
+
+- Registry: cluster pull `localhost:5001/registry-test:1` → `Pulling` → `Pulled in 214ms`. Restart containerd lần lượt 3 node: node `Ready` lại ngay, không Pod nào restart.
+- Test: 10/10 pass trên máy host (Node 22) trước khi đưa vào pipeline.
+- **Lần chạy đầu `payment` FAIL ở stage deploy**: `conflict with "kubectl-client-side-apply" ... .spec.template.spec.containers[name="payment"].image` → `--rollback-on-failure` tự rollback (revision 5 failed → 6 "Rollback to 4"). Sau `migrate-field-managers.ps1` (20 object): generation Deployment +1 nhưng **không có ReplicaSet mới, Pod giữ nguyên tuổi** → chạy lại pipeline OK.
+- Pipeline 3 service: `payment` 29s, `user` 32s, `booking` 25s (test ~2s, build 3-6s, push 1-1.5s, deploy 13-21s, smoke 2s); mỗi lần 1 commit `deploy(<svc>): <sha>`. Traffic qua Ingress trong lúc lần fail + lần deploy `payment`: **570/570 OK**.
+- **Demo A** (`bookingId`): tag mới `5f5a024b8892`, 23s, response có `"bookingId":"c27e78ed-..."`; traffic **220/220 OK**.
+- **Demo B** (503 → 500): dừng ở `1/6 test` (`not ok 3 ... expected: 503 actual: 500`, `not ok 4` metrics) - Helm vẫn revision 3, registry **không có** tag `4038644672e0`, Pod vẫn chạy `5f5a024b8892`.
+- **Demo C** (`CMD server.jss`): test/build/push đều OK (test chạy trên host, không đụng Dockerfile) → deploy: `resource Deployment/default/booking not ready ... Updated: 1/2 ... context deadline exceeded` → Helm tự rollback (revision 4 failed → 5 "Rollback to 3"), `booking-image.yaml` trả về tag cũ, git sạch. Traffic **318/318 OK** - Pod cũ không bị gỡ vì Pod mới không bao giờ Ready (`maxUnavailable` 25% của 2 replica = 0).
+- Sau Phase 23: 4 release `deployed`, Prometheus 30/30 `up`, chỉ `Watchdog` firing.
+
+> **Bài học quan trọng #1 - adopt vào Helm chưa xong cho tới lần ĐỔI giá trị đầu tiên**: `--take-ownership` (Phase 22) qua được vì Helm apply đúng giá trị cũ - manager cũ `kubectl-client-side-apply` vẫn đồng sở hữu mọi field. Lần đầu đổi `image` → server-side apply conflict. Phải dọn manager cũ 1 lần (hoặc `--force-conflicts` - nhưng dọn sạch thì về sau không phải force). Phụ: xoá annotation làm `generation` của Deployment tăng (Deployment tăng generation khi annotation đổi, StatefulSet thì không) nhưng không rollout.
+>
+> **Bài học quan trọng #2 - tag bất biến biến rollback thành thật**: `:v1` bị build đè ở Phase 21 nên "rollback về v1" vô nghĩa. Tag = git SHA → mỗi revision Helm trỏ tới đúng 1 image không đổi, `helm rollback` chạy lại đúng bản cũ. Tag tính theo commit cuối động vào thư mục service (không phải `HEAD`) → commit `deploy(...)` hay sửa service khác không đổi tag. Nhưng `git revert` tạo commit mới → cùng nội dung với bản trước vẫn ra **tag mới** (tag theo commit, không theo nội dung).
+>
+> **Bài học quan trọng #3 - test và cluster bắt các loại lỗi khác nhau**: Demo B (logic) bị test chặn trước khi tốn build/push; Demo C (đóng gói - Dockerfile) qua được test vì test chạy trên host. Lớp cuối là readiness probe + `--rollback-on-failure` + rolling update `maxUnavailable: 0` → bản lỗi không bao giờ nhận traffic. Muốn bắt sớm hơn: chạy test **bên trong** image vừa build (`docker run <image> npm test`) hoặc smoke test container trước khi push.
+>
+> **Bài học quan trọng #4 - từ giờ `helm upgrade` tay phải có `-f helm-values/<svc>-image.yaml`**: thiếu file này, chart lấy `image.repository` trong `helm-values/<svc>.yaml` (`booking-service`, tag mặc định `v1`) → **quay về image cũ** (bản `kind load`, không có `bookingId`). Deploy app nên luôn đi qua `ci/pipeline.ps1`.
+>
+> **Bài học quan trọng #5 - local registry trên kind**: `kind` không cấu hình sẵn containerd đọc `certs.d` (`config_path = ''`) → phải bật `config_path` + `hosts.toml` trên mọi node (registry nói HTTP, tên `kind-registry` phân giải được vì cùng mạng Docker `kind`). Image trong cluster tên `localhost:5001/...` nhưng containerd được chỉ sang `http://kind-registry:5000`.
+>
+> **Bài học quan trọng #6 - Windows/PowerShell**: bật `$PSNativeCommandUseErrorActionPreference` thì mọi lệnh ngoài lỗi đều ném exception - kể cả lệnh "dọn dẹp" trong `catch` (vd. `git checkout` file chưa track) → phải tự kiểm tra trước khi gọi. Truyền mảng `-Service a,b` chỉ chạy được khi gọi script trong phiên PowerShell (`./ci/pipeline.ps1`), không qua `pwsh -File`. Git Bash tự đổi `/etc/...` thành `C:/Program Files/Git/etc/...` khi `docker exec` → `MSYS_NO_PATHCONV=1`.
+
+---
+
 <a id="cleanup"></a>
 ## Cleanup - xoá image Docker cũ không dùng
 
