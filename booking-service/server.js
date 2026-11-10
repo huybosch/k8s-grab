@@ -36,7 +36,7 @@ app.post("/booking", async (req, res) => {
   } catch (err) {
     const detail = err.name === "TimeoutError" ? `timeout ${PAYMENT_TIMEOUT_MS}ms` : (err.cause && err.cause.code) || err.message;
     console.error("payment call failed:", detail);
-    res.status(500).json({ service: "booking-service", version: VERSION, error: "payment unavailable", detail });
+    res.status(503).json({ service: "booking-service", version: VERSION, error: "payment unavailable", detail });
   }
 });
 
