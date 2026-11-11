@@ -22,7 +22,10 @@ ingress:
       service: user-service
     - path: /booking
       service: booking-service
-    - path: /payment          # Prefix -> gồm cả /payments/stats
+    # pathType Prefix khớp theo TỪNG ĐOẠN path: /payment khớp /payment, /payment/x - KHÔNG khớp /payments
+    - path: /payment
+      service: payment-service
+    - path: /payments         # /payments/stats
       service: payment-service
     - path: /drivers
       service: driver-service

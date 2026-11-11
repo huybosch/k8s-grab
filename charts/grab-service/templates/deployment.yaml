@@ -30,6 +30,9 @@ spec:
           labelSelector:
             matchLabels:
               {{- include "grab-service.selectorLabels" . | nindent 14 }}
+          # Final Project: chỉ đếm Pod CÙNG ReplicaSet (cùng revision). Không có dòng này, lúc rolling update Pod CŨ
+          # (cùng label app) vẫn được tính -> Pod mới dồn sang node còn ít Pod cũ, Pod cũ xoá xong thì lệch hết về 1 node
+          matchLabelKeys: ["pod-template-hash"]
       {{- end }}
       {{- with .Values.nodeFailureTolerationSeconds }}
       tolerations:
