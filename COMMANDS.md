@@ -1,4 +1,4 @@
-# Grab Mini - Command Reference (Phase 0 → Phase 24)
+# Grab Mini - Command Reference (Phase 0 → Phase 24 + Final Project)
 
 Nhật ký lab: mỗi **Scenario** = lệnh đã chạy thật + code liên quan + kết quả đã verify + bài học, theo đúng thứ tự làm. Giáo trình (học gì, vì sao) nằm ở [../Roadmap.md](../Roadmap.md).
 
@@ -12,12 +12,12 @@ Nhật ký lab: mỗi **Scenario** = lệnh đã chạy thật + code liên quan
 | Code | `grab-mini/` = repo `github.com/huybosch/k8s-grab` (public, nhánh `main`); mỗi lần deploy = 1 commit `deploy(<svc>): <sha>`, rollback = commit `Revert ...` | `git` + GitHub Actions `ci.yaml` (test + build + chạy thử container) |
 | GitOps | Argo CD 3.6.1 (namespace `argocd`): `root` → AppProject `grab-mini`, ApplicationSet `grab-services` (booking/payment/user), `grab-platform`; poll Git 60s, selfHeal | Helm: `argocd` (`k8s/argocd/values.yaml`) + `kubectl apply -f argocd/root.yaml` (1 lần) |
 | Registry | `registry:2.8.3` container `kind-registry`, `localhost:5001` (trong cluster: `http://kind-registry:5000`) | `ci/setup-local-registry.ps1` |
-| App | `booking` (HPA 2-10), `payment` x3, `user` x3 - image `localhost:5001/<svc>-service:<git-sha>` (tag đang chạy: `helm-values/<svc>-image.yaml`); probe, PDB, topologySpread, failover 30s | `ci/pipeline.ps1` → Git → Argo CD: `booking`, `payment`, `user` (chart `grab-service`) |
-| Platform | ConfigMap `booking-config`, Ingress `/users` `/booking` `/payment`, 5 NetworkPolicy (default-deny), CronJob `settlement-job`, StatefulSet `postgres` | Git → Argo CD: `grab-platform` (không prune) |
-| Secret | `booking-secret` | `kubectl create secret` (cố ý ngoài Git) |
+| App | `booking` (HPA 2-10), `payment` x3, `user` x3, `driver` x3, `notification` x2 - image `localhost:5001/<svc>-service:<git-sha>` (tag đang chạy: `helm-values/<svc>-image.yaml`); probe, PDB, topologySpread (`matchLabelKeys`), preStop 10s, requests/limits, failover 30s | `ci/pipeline.ps1` → Git → Argo CD: ApplicationSet `grab-services` (chart `grab-service`) |
+| Platform | ConfigMap `booking-config`, Ingress `/users` `/booking` `/payment` `/payments` `/drivers`, 7 NetworkPolicy (default-deny + luồng theo sơ đồ), CronJob `settlement-job`, StatefulSet `postgres` (bảng `payments`, role `payment`), Job `db-init` (PostSync), Deployment `redis` | Git → Argo CD: `grab-platform` (không prune) |
+| Secret | `payment-db` (user DB `payment`, password ngẫu nhiên), `booking-secret` (không còn service nào dùng) | `kubectl create secret` (cố ý ngoài Git) |
 | Hạ tầng | `ingress-nginx` (+ patch nodeSelector), `metrics-server` (+ patch insecure-tls) | `kubectl apply` từ URL upstream |
 | Monitoring | `kube-prometheus-stack` 93.1.1, Loki 7.5.0, Alloy 1.15.0 (namespace `monitoring`) | Helm: `monitoring`, `loki`, `alloy` |
-| Monitoring config | ServiceMonitor, PrometheusRule (5 alert), `alert-webhook`, dashboard Grafana | `kubectl apply -f k8s/monitoring/` |
+| Monitoring config | ServiceMonitor, PrometheusRule (5 alert, 5 service), `alert-webhook`, dashboard Grafana | `kubectl apply -f k8s/monitoring/` |
 
 ## 📋 Menu
 
@@ -46,6 +46,7 @@ Nhật ký lab: mỗi **Scenario** = lệnh đã chạy thật + code liên quan
 - [[#Scenario 22 - Helm: chart dùng chung + chuyển resource đang chạy sang Helm (Phase 22)|Scenario 22 - Helm: chart dùng chung + chuyển resource đang chạy sang Helm (Phase 22)]]
 - [[#Scenario 23 - CI/CD: pipeline local + local registry + tag theo git SHA (Phase 23)|Scenario 23 - CI/CD: pipeline local + local registry + tag theo git SHA (Phase 23)]]
 - [[#Scenario 24 - GitOps: Argo CD + app-of-apps, deploy = git push (Phase 24)|Scenario 24 - GitOps: Argo CD + app-of-apps, deploy = git push (Phase 24)]]
+- [[#Scenario 25 - Final Project: ráp đủ Grab Mini Platform (5 service + Redis + PostgreSQL)|Scenario 25 - Final Project: ráp đủ Grab Mini Platform (5 service + Redis + PostgreSQL)]]
 - [[#Cleanup - xoá image Docker cũ không dùng|Cleanup - xoá image Docker cũ không dùng]]
 - [[#🔁 Dựng lại toàn bộ cluster từ đầu|🔁 Dựng lại toàn bộ cluster từ đầu]]
 - [[#🧠 Tổng hợp bài học|🧠 Tổng hợp bài học]]
@@ -2452,6 +2453,120 @@ git log --oneline -8
 
 ---
 
+<a id="scenario-25"></a>
+## Scenario 25 - Final Project: ráp đủ Grab Mini Platform (5 service + Redis + PostgreSQL)
+
+```text
+                    ingress-nginx (localhost:80)
+        /users        /booking         /drivers        /payment(s)
+          │              │                │                │
+          ▼              ▼                ▼                ▼
+       user x3       booking x2-10     driver x3       payment x3 ──► PostgreSQL (user DB "payment": SELECT+INSERT)
+          │           │       │           │                ▲
+          ▼           │       └──────┐    │                │ db-init Job (Argo CD PostSync): role + bảng payments
+        Redis         └──► payment   ▼    ▼
+     (cache, views)        (retry +  notification x2   (chỉ nội bộ, không có route Ingress)
+                            idempotency key)
+
+   phụ thuộc QUAN TRỌNG (lỗi = lỗi):        booking → payment → PostgreSQL
+   phụ thuộc KHÔNG quan trọng (lỗi = null): user → Redis, booking/driver → notification
+```
+
+Mọi thay đổi đi qua Git → Argo CD (Scenario 24): platform (Redis, Job, NetworkPolicy, Ingress) = sửa chart + `git push`; service = `./ci/pipeline.ps1`. Thứ tự deploy theo phụ thuộc: platform → `notification` → `driver` → `payment` → `user` → `booking`.
+
+```powershell
+cd D:\OBsidian\NUO3HC\Kubernetes\grab-mini
+
+# --- Bước 1: Secret DB riêng cho payment (ngoài Git, password ngẫu nhiên, không in ra) ---
+$pw = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(24)) -replace '[+/=]', ''
+kubectl create secret generic payment-db --from-literal=DB_USERNAME=payment --from-literal=DB_PASSWORD=$pw; Remove-Variable pw
+
+# --- Bước 2: platform + code + values -> git push (ApplicationSet CHƯA thêm driver/notification) ---
+git commit -am "feat(final): platform + code 5 service"; git push
+kubectl logs job/db-init                       # CREATE ROLE / ALTER ROLE / CREATE TABLE / GRANT / db-init done
+kubectl get application grab-platform -n argocd -o json | ConvertFrom-Json | % { $_.status.resources | ? requiresPruning }
+kubectl delete netpol allow-booking-payment-to-postgres   # policy cũ: đã xoá khỏi Git nhưng prune: false -> phải tự xoá
+
+# kiểm tra quyền mạng (nc từ trong Pod)
+kubectl exec deploy/booking -- nc -z -w 2 postgres 5432; $LASTEXITCODE   # 1 = BLOCKED
+kubectl exec deploy/payment -- nc -z -w 2 postgres 5432; $LASTEXITCODE   # 0 = OPEN
+kubectl exec deploy/user    -- nc -z -w 2 redis 6379;    $LASTEXITCODE   # 0
+
+# --- Bước 3: service mới - mỗi lần thêm 1 element vào argocd/apps/services.yaml, commit, rồi pipeline ---
+git commit -am "feat(argocd): thêm Application notification"; ./ci/pipeline.ps1 -Service notification
+git commit -am "feat(argocd): thêm Application driver";       ./ci/pipeline.ps1 -Service driver
+./ci/pipeline.ps1 -Service payment,user,booking
+
+# --- Bước 4: verify end-to-end ---
+curl.exe -s -X POST http://localhost/booking -H "Content-Type: application/json" -d '{}'
+curl.exe -s http://localhost/payments/stats
+kubectl exec postgres-0 -- psql -U postgres -d grabmini -tAc "SELECT count(*) FROM payments"
+curl.exe -s -X POST http://localhost/drivers/driver-1/accept -H "Content-Type: application/json" -d '{"bookingId":"b-42"}'
+kubectl logs -l app=notification --tail 5
+
+# --- Bước 5: đo zero-downtime khi 5 service rollout CÙNG LÚC (traffic loop 5 endpoint ở terminal khác) ---
+kubectl rollout restart deploy booking payment user driver notification   # restartedAt không thuộc Argo CD -> không bị selfHeal đè
+```
+
+**📄 Code liên quan:**
+
+- `payment-service/server.js` - `pg` 8.23.1, `Pool` (`max 5`, `connectionTimeoutMillis`/`query_timeout` 1500ms, `pool.on("error")` để client rảnh bị ngắt không làm crash process). `POST /payment`: validate `amount`, nhận `paymentId` (idempotency key, phải là UUID) → `INSERT ... ON CONFLICT (id) DO NOTHING`; DB lỗi → **503 `database unavailable`**. `GET /payments/stats`. `/health` **không** kiểm tra DB (DB chết mà liveness fail = kubelet restart toàn bộ Pod payment vô ích). DB inject được qua `app.set("db", ...)` để test không cần PostgreSQL.
+- `booking-service/server.js` - `callPayment(paymentId)`: tối đa 2 lần × 1s, retry khi lỗi kết nối / timeout / 5xx (không retry 4xx), `paymentId = bookingId`. `notify()`: timeout 1s, lỗi → `notification: null`, booking vẫn 200. Bỏ `envFrom` DB (booking không dùng DB).
+- `user-service/server.js` - `redis` 6.3.0 (`disableOfflineQueue: true`: mất kết nối → lệnh lỗi ngay thay vì xếp hàng; `reconnectStrategy` tối đa 2s). `GET /users` → `INCR users:views` với timeout 300ms; Redis lỗi/treo → `views: null`.
+- `driver-service/server.js` (viết lại) - `GET /drivers`, `POST /drivers/:id/accept` → báo notification (best-effort như booking), 404 nếu tài xế không tồn tại. `notification-service/server.js` (viết lại) - `POST /notify` ghi 1 dòng log JSON (Loki thu được), trả `notificationId`. Cả hai: `metrics.js`, `server.test.js`, export `app`, `.dockerignore`, `npm ci`.
+- Test: 25 test (`booking` 6, `payment` 7, `user` 5, `driver` 4, `notification` 3) - mỗi phụ thuộc đều có server/client **giả** và test trường hợp phụ thuộc chết/treo.
+- `charts/grab-platform/templates/redis.yaml` (mới) - Deployment `redis:7.4-alpine` 1 replica, `--save "" --appendonly no --maxmemory 64mb --maxmemory-policy allkeys-lru` (cache, không lưu đĩa), `strategy: Recreate`, probe `redis-cli ping`.
+- `charts/grab-platform/templates/db-init.yaml` (mới) - Job hook `argocd.argoproj.io/hook: PostSync` (+ `helm.sh/hook: post-install,post-upgrade`), `hook-delete-policy: BeforeHookCreation`, label `app: db-init`. `psql`: tạo role `payment` nếu chưa có (`\gexec`), `ALTER ROLE ... PASSWORD :'app_password'` (từ Secret `payment-db`), `CREATE TABLE IF NOT EXISTS payments`, `GRANT SELECT, INSERT`.
+- `charts/grab-platform/templates/networkpolicies.yaml` (viết lại) - khai báo theo values: `appPorts` (app → containerPort), `public` (có route Ingress), `allow` (mỗi dòng `{to, from[], port}` → 1 policy `allow-<from>-to-<to>`):
+
+  ```yaml
+  allow:
+    - { to: payment, from: [booking], port: 3004 }
+    - { to: notification, from: [booking, driver], port: 3005 }
+    - { to: postgres, from: [payment, db-init], port: 5432 }   # booking KHÔNG còn vào DB
+    - { to: redis, from: [user], port: 6379 }
+  ```
+
+- `charts/grab-platform/values.yaml` - route Ingress `/drivers`, `/payments`; `dbInit`, `redis`.
+- `charts/grab-service/templates/deployment.yaml` - `topologySpreadConstraints.matchLabelKeys: ["pod-template-hash"]`.
+- `helm-values/driver.yaml`, `notification.yaml`, `notification-prod.yaml` (`replicaCount: 2`) (mới); `payment.yaml` (`envFrom` `booking-config` + `payment-db`), `user.yaml` (`REDIS_URL`), mọi service có `resources` (requests 50m/64Mi, limit memory 256Mi); `env-prod.yaml`: `preStopSleepSeconds: 10` cho mọi service.
+- `argocd/apps/services.yaml` - thêm element `notification`, `driver`. `ci/pipeline.ps1` - `ValidateSet` 5 service; `Wait-ArgoSync` chờ được Application **chưa tồn tại** (refresh `root`); smoke `driver` qua Ingress, `notification` qua `kubectl exec deploy/booking -- wget` (không có route Ingress). `ci.yaml`: `paths: ["*-service/**"]` + filter 5 service. `alerts-apps.yaml` + dashboard: `job=~"(booking|payment|user|driver|notification)-service"`.
+
+**✅ Kết quả thật đã verify (11/11/2026):**
+
+- Push platform: Redis chạy, `db-init` in `CREATE ROLE / ALTER ROLE / CREATE TABLE / GRANT / db-init done`; 3 service cũ rollout vì đổi values; traffic `/booking` `/users` `/payment` **2046/2046 OK**.
+- `grab-platform` kẹt `OutOfSync`: `NetworkPolicy/allow-booking-payment-to-postgres requiresPruning=True`. Trước khi xoá: `booking → postgres:5432` **OPEN** (Git đã cấm nhưng cluster vẫn cho). `kubectl delete netpol` → booking **BLOCKED**, payment OPEN, app về `Synced`. Ma trận cuối: booking→postgres BLOCKED, user→postgres BLOCKED, user→redis OPEN, booking→redis BLOCKED.
+- `notification` 29s, `driver` 28s - pipeline in `chưa có Application -> refresh root` rồi `Synced Healthy` sau ~13s. `payment` 38s, `user` 43s, `booking` 29s; traffic **1737/1737 OK**.
+- End-to-end: booking `0cf6676c-...` → dòng `aa84d643-...|100.00` trong bảng `payments`; role `payment` chỉ có `INSERT,SELECT`; log notification có `bookingId` + `transactionId`; `views` 251 → 252 → 253. `driver-1/accept` → `"notification":{"type":"driver-accepted",...}`. User Redis thật (container tạm trên máy): views 1 → 2; dừng Redis → `views: null` sau 3ms.
+- **Lỗi 1**: `/payments/stats` → **404 của nginx** - Prefix `/payment` không khớp `/payments` → thêm route `/payments`.
+- **Lỗi 2**: 2 Pod `booking` cùng nằm trên `grab-mini-worker` dù có topologySpread `maxSkew: 1, DoNotSchedule` → thêm `matchLabelKeys: ["pod-template-hash"]` → sau rollout: booking 1/1, service 3 replica 1/2.
+- **Lỗi 3 - rớt request khi 5 service rollout cùng lúc** (đổi chart/`env-prod.yaml` dùng chung):
+
+  | Cấu hình | Traffic (5 endpoint) | Lỗi |
+  |---|---|---|
+  | chỉ booking có `preStop 5s` | 1769 / 1 | `/users` lỗi kết nối |
+  | mọi service `preStop 5s` | 4790 / 5 | 3× booking 503 (log: `ECONNREFUSED`, 2× `timeout 2000ms`), 2× treo 5s (`/payment`, `/drivers/.../accept`) |
+  | `preStop 10s` + booking retry có idempotency key | **5265 / 0** | không lần retry nào xảy ra |
+
+  Thử giả thuyết "NetworkPolicy cho Pod mới áp chậm": Pod mới (`app=notification`) → booking connect được **ngay lần thử đầu**, cả trong `default` (có policy) lẫn namespace không có policy → **bác bỏ**. Metric kube-proxy (`kubeproxy_network_programming_duration_seconds`, iptables, `minSyncPeriod: 1s`): trung bình 2.3s, 98% < 3s, **đuôi tới 25-37s** → Pod cũ vẫn nhận kết nối sau khi đã tắt.
+- Sau cùng: 7 Application `Synced Healthy`; Prometheus **35/35** target `up` (5 service), chỉ `Watchdog` firing; 4940 payment trong DB; GitHub Actions `success` mọi commit. Phân bố: `worker`: booking, driver, notification, payment, user ×1 + postgres; `worker2`: booking ×1, driver/payment/user ×2, notification ×1 + redis.
+
+> **Bài học quan trọng #1 - phân loại phụ thuộc trước khi viết code gọi nó**: payment/DB là phụ thuộc **quan trọng** (không trừ được tiền thì booking phải lỗi - trả 503 rõ ràng, nhanh). Redis, notification là **không quan trọng** → timeout ngắn (300ms-1s) + trả `null`, request chính vẫn 200. Không phân loại thì 1 cache chết kéo sập cả `/users`. `/health` không được kiểm tra phụ thuộc (DB chết ≠ Pod payment hỏng; liveness fail sẽ restart vô ích).
+>
+> **Bài học quan trọng #2 - retry POST chỉ an toàn khi có idempotency key**: lỗi kết nối/timeout không cho biết request đã tới DB hay chưa. Retry mù = có thể trừ tiền 2 lần. `paymentId = bookingId` + `INSERT ... ON CONFLICT DO NOTHING` → gọi bao nhiêu lần cũng 1 dòng. Không retry 4xx (gọi lại vẫn sai).
+>
+> **Bài học quan trọng #3 - `preStop` là cược với độ trễ cập nhật mạng**: endpoint của Pod đang tắt được gỡ ngay, nhưng kube-proxy (iptables) và ingress-nginx cần thời gian áp vào - đo được trung bình 2.3s, đuôi > 25s, và tệ hơn khi nhiều Deployment rollout cùng lúc. 5s đủ cho 1 service rollout tuần tự (0 lỗi ở mọi lần pipeline), không đủ cho 5 service cùng lúc. Phòng thủ nhiều lớp: preStop dài hơn + client retry (an toàn nhờ #2) + tránh rollout đồng loạt (sửa file dùng chung như `env-prod.yaml` = rollout mọi service).
+>
+> **Bài học quan trọng #4 - topologySpread đếm cả Pod của revision cũ**: lúc rolling update, Pod cũ cùng label vẫn được tính → Pod mới dồn về node ít Pod cũ → xoá Pod cũ xong thì lệch. `matchLabelKeys: [pod-template-hash]` = chỉ đếm Pod cùng ReplicaSet.
+>
+> **Bài học quan trọng #5 - `prune: false` để lại quyền cũ**: đổi tên/xoá NetworkPolicy trong Git thì policy cũ vẫn chạy - ở đây là **lỗ hổng** (booking vẫn vào được DB). Argo CD có báo (`OutOfSync` + `requiresPruning`) nhưng không tự sửa → phải kiểm tra `requiresPruning` sau mỗi lần đổi platform và xoá có chủ đích. Least privilege kiểm chứng bằng **phép thử thật** (`nc` từ trong Pod), không phải đọc YAML.
+>
+> **Bài học quan trọng #6 - Ingress `pathType: Prefix` khớp theo đoạn path**: `/payment` khớp `/payment` và `/payment/x`, KHÔNG khớp `/payments` (404 trả từ nginx, request không tới app).
+>
+> **Bài học quan trọng #7 - least privilege cho DB ở 3 lớp**: (1) mạng - chỉ `payment` + `db-init` vào được `postgres:5432`; (2) credential - booking không còn `envFrom` Secret DB, payment có user riêng; (3) quyền SQL - role `payment` chỉ `SELECT, INSERT` (không `UPDATE/DELETE/DROP`), superuser chỉ Job `db-init` dùng. Đây là nền cho Incident 7.
+
+---
+
 <a id="cleanup"></a>
 ## Cleanup - xoá image Docker cũ không dùng
 
@@ -2502,21 +2617,25 @@ helm upgrade --install loki grafana/loki --version 7.5.0 -n monitoring -f k8s/mo
 helm upgrade --install alloy grafana/alloy --version 1.15.0 -n monitoring -f k8s/monitoring/alloy-values.yaml --wait
 kubectl apply -f k8s/monitoring/servicemonitor-apps.yaml -f k8s/monitoring/alerts-apps.yaml -f k8s/monitoring/alert-webhook.yaml -f k8s/monitoring/grab-mini-dashboard-cm.yaml
 
-# --- 5. app: Secret (ngoài Git) -> Argo CD -> bootstrap 1 lệnh; Argo CD tự dựng platform + 3 service từ Git ---
-kubectl create secret generic booking-secret --from-literal=DB_USERNAME=admin --from-literal=DB_PASSWORD=change-me
+# --- 5. app: Secret (ngoài Git) -> Argo CD -> bootstrap 1 lệnh; Argo CD tự dựng platform + 5 service từ Git ---
+#   payment-db PHẢI có trước: Job db-init (PostSync của grab-platform) đọc password từ đây
+$pw = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(24)) -replace '[+/=]', ''
+kubectl create secret generic payment-db --from-literal=DB_USERNAME=payment --from-literal=DB_PASSWORD=$pw; Remove-Variable pw
 helm repo add argo https://argoproj.github.io/argo-helm
 helm upgrade --install argocd argo/argo-cd --version 10.16.0 -n argocd --create-namespace -f k8s/argocd/values.yaml --wait --timeout 5m
 kubectl apply -f argocd/root.yaml
 # image tag lấy từ helm-values/<svc>-image.yaml trong Git -> image PHẢI còn trong registry kind-registry
-#   (mất registry: ./ci/pipeline.ps1 -Service payment,user,booking - build + push lại; tag không đổi -> không có commit mới)
+#   (mất registry: ./ci/pipeline.ps1 -Service notification,driver,payment,user,booking - build + push lại; tag không đổi -> không có commit mới)
 # cluster mới: Argo CD tự tạo object -> KHÔNG cần migrate-field-managers, không có release Helm nào để xoá
 
 # --- 6. verify ---
 helm list -A                                            # 4 release: monitoring, loki, alloy, argocd
-kubectl get applications -n argocd                      # 5 app Synced Healthy
+kubectl get applications -n argocd                      # 7 app Synced Healthy
+kubectl logs job/db-init                                # db-init done
 kubectl get pods -o wide --sort-by=.spec.nodeName       # Pod trải đều worker / worker2
 curl.exe -s http://localhost/users
-curl.exe -s -X POST http://localhost/booking -H "Content-Type: application/json" -d '{"from":"A"}'   # có payload của payment
+curl.exe -s -X POST http://localhost/booking -H "Content-Type: application/json" -d '{}'   # có payment.transactionId + notification
+curl.exe -s http://localhost/payments/stats; curl.exe -s http://localhost/drivers
 $P = "/api/v1/namespaces/monitoring/services/monitoring-kube-prometheus-prometheus:9090/proxy"
 kubectl get --raw "$P/api/v1/targets?state=active" | jq -r '[.data.activeTargets[].health] | group_by(.) | map("\(.[0])=\(length)") | join(" ")'   # chỉ có "up"
 ```
@@ -2545,6 +2664,7 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 | Vượt memory limit = **bị kill** (`OOMKilled`, exit 137); vượt CPU limit = **bị throttle** (xem `cpu.stat`), không bị kill | [9](#scenario-9) |
 | HPA scale-down chờ ~5 phút (`stabilizationWindowSeconds`) - không phải lỗi | [10](#scenario-10) |
 | Graceful shutdown cần đủ 3 thứ: `preStop sleep` (chờ endpoint gỡ Pod) + handler `SIGTERM` gọi `server.close()` + `terminationGracePeriodSeconds` đủ dài | [11](#scenario-11) |
+| `preStop` phải đủ dài so với độ trễ kube-proxy/ingress (đo được trung bình 2.3s, đuôi > 25s): 5s rớt 5/4795 khi 5 service rollout cùng lúc, 10s → 0/5265 | [25](#scenario-25) |
 
 **Networking & Ingress**
 
@@ -2557,6 +2677,8 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 | `ports` trong NetworkPolicy là port **container** (3003), không phải port Service (80); packet bị chặn = timeout (DROP), không phải refused | [19](#scenario-19) |
 | Default-deny chặn cả hạ tầng của mình (Prometheus `context deadline exceeded`), nhưng không chặn probe của kubelet | [19](#scenario-19), [20](#scenario-20) |
 | Gọi Service có 0 endpoint bị **treo** (~10s), không lỗi ngay → mọi lời gọi ra ngoài phải có timeout | [20](#scenario-20) |
+| Ingress `pathType: Prefix` khớp theo đoạn path: `/payment` không khớp `/payments` (404 từ nginx) | [25](#scenario-25) |
+| `prune: false` giữ lại NetworkPolicy đã xoá khỏi Git → booking vẫn vào được DB; kiểm tra `requiresPruning` + thử thật bằng `nc` từ trong Pod | [25](#scenario-25) |
 
 **Storage & stateful**
 
@@ -2573,11 +2695,21 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 |---|---|
 | Scheduler mặc định cân bằng theo tài nguyên, không theo số Pod cùng app → cần `topologySpreadConstraints` | [17](#scenario-17) |
 | `topologySpreadConstraints` thiếu `nodeTaintsPolicy: Honor` → control-plane (0 Pod) bị tính vào skew → `FailedScheduling` vĩnh viễn | [17](#scenario-17) |
+| topologySpread đếm cả Pod revision cũ lúc rolling update → 2 Pod booking cùng 1 node; `matchLabelKeys: [pod-template-hash]` | [25](#scenario-25) |
 | Required anti-affinity: số replica tối đa = số node, rolling update deadlock; anti-affinity có tính **đối xứng** → dùng `preferred` | [18](#scenario-18) |
 | `kubectl apply` không gỡ được field đã thêm bằng `kubectl patch` (three-way merge theo `last-applied`) | [18](#scenario-18) |
 | Node chết: Pod chỉ bị thay sau `tolerationSeconds` (mặc định 300s, đo được 5m44s); đặt 30s → failover ~82s | [16](#scenario-16), [18](#scenario-18) |
 | ~50s đầu khi node chết (trước `NotReady`) traffic vẫn tới Pod đã chết - Kubernetes không tự cứu được, cần retry ở app/proxy | [18](#scenario-18) |
 | PDB chỉ chặn drain/eviction, không chặn node chết; HPA `min 1` + PDB `minAvailable 1` = drain kẹt vĩnh viễn | [18](#scenario-18) |
+
+**Thiết kế service & phụ thuộc**
+
+| Bài học | Scenario |
+|---|---|
+| Phân loại phụ thuộc: quan trọng (DB của payment → lỗi nhanh 503) vs không quan trọng (Redis, notification → timeout ngắn + `null`, request vẫn 200) | [25](#scenario-25) |
+| Retry POST chỉ an toàn khi có idempotency key (`paymentId = bookingId` + `ON CONFLICT DO NOTHING`); không retry 4xx | [25](#scenario-25) |
+| `/health` không kiểm tra DB - DB chết mà liveness fail = restart toàn bộ Pod vô ích | [25](#scenario-25) |
+| Least privilege DB 3 lớp: NetworkPolicy, Secret riêng từng service, quyền SQL tối thiểu (`SELECT, INSERT`); superuser chỉ cho Job `db-init` | [25](#scenario-25) |
 
 **Observability**
 
@@ -2636,8 +2768,9 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 ## Việc còn thiếu
 
 **App**
-- `driver-service`, `notification-service`: mới có image `:v1`, chưa có values Helm (`helm-values/driver.yaml`, `notification.yaml`), chưa có route Ingress, chưa có `/metrics`.
-- `booking`/`payment` chưa thật sự query Postgres (mới có hạ tầng + `DB_*` env).
+- Driver/notification là bản tối giản: danh sách tài xế cố định, notification chỉ ghi log (chưa gửi SMS/push), chưa có queue (booking gọi notification đồng bộ - nên đổi sang message queue / outbox).
+- Chưa có migration tool (Flyway / node-pg-migrate) - schema nằm trong Job `db-init`; chưa có bảng `bookings` (booking không lưu gì).
+- `booking-secret` không còn service nào dùng - có thể xoá.
 - Image `<svc>-service:v1/v2/v3` (bản `kind load` cũ của Phase 2-21) vẫn còn trên node + Docker Desktop nhưng không còn dùng - prod chạy `localhost:5001/<svc>-service:<sha>`.
 
 **CI/CD + GitOps**
@@ -2646,13 +2779,14 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 - Argo CD: chưa có webhook (poll 60s), chưa có notifications (Slack) khi sync lỗi, chưa đổi password admin / tắt user admin, chưa scrape metrics Argo CD vào Prometheus. Monitoring, ingress-nginx, metrics-server và chính Argo CD **chưa** được quản lý bằng Argo CD (vẫn Helm/kubectl tay).
 - `booking-secret` vẫn tạo tay (ngoài Git) → Argo CD không dựng lại được nếu thiếu; cần Sealed Secrets / External Secrets.
 - Chưa giảm `progressDeadlineSeconds` → Argo CD chỉ báo `Degraded` sau 10 phút.
+- Sửa file dùng chung (`env-prod.yaml`, chart `grab-service`) = rollout **mọi** service cùng lúc - chưa có cách tách đợt (sync-wave / từng app).
 - Runbook dựng lại cluster bằng Argo CD (bước 5) chưa chạy thử trên cluster mới.
 - Registry không có volume: xoá container `kind-registry` = mất mọi image (kể cả bản đang chạy). Registry còn image rác (`registry-test`, `booking-service:989561244027` của Demo C) - `registry:2` mặc định tắt API xoá.
 
 **Vận hành**
 - `booking-secret` tạo tay → cân nhắc Sealed Secrets / External Secrets.
 - `ingress-nginx` và `metrics-server` cài từ URL `main` / `latest`, chưa pin version.
-- Postgres dùng `local-path` (1 node) - chưa có replication/backup.
+- Postgres dùng `local-path` (1 node) - chưa có replication/backup. Redis 1 replica, không lưu đĩa (cache - chấp nhận mất).
 - NetworkPolicy mới có chiều **ingress**, chưa có **egress**.
 
 **Observability**
@@ -2663,4 +2797,4 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 - Runbook [🔁 Dựng lại toàn bộ cluster](#rebuild) chưa chạy trọn vẹn 1 lần liên tục.
 
 **Roadmap**
-- Final Project, Production Simulation (Incident 1-7).
+- Production Simulation (Incident 1-7), demo cuối khoá.

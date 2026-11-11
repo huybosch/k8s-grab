@@ -38,7 +38,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(http_requests_total{job=~\"booking-service|payment-service|user-service\"}[1m]))",
+          "expr": "sum(rate(http_requests_total{job=~\"(booking|payment|user|driver|notification)-service\"}[1m]))",
           "instant": true
         }
       ]
@@ -86,7 +86,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "(sum(rate(http_requests_total{job=~\"booking-service|payment-service|user-service\",status=~\"5..\"}[1m])) or vector(0)) / clamp_min(sum(rate(http_requests_total{job=~\"booking-service|payment-service|user-service\"}[1m])),1e-9)",
+          "expr": "(sum(rate(http_requests_total{job=~\"(booking|payment|user|driver|notification)-service\",status=~\"5..\"}[1m])) or vector(0)) / clamp_min(sum(rate(http_requests_total{job=~\"(booking|payment|user|driver|notification)-service\"}[1m])),1e-9)",
           "instant": true
         }
       ],
@@ -229,7 +229,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (job) (rate(http_requests_total{job=~\"booking-service|payment-service|user-service\"}[1m]))",
+          "expr": "sum by (job) (rate(http_requests_total{job=~\"(booking|payment|user|driver|notification)-service\"}[1m]))",
           "legendFormat": "{{job}}"
         }
       ]
@@ -271,7 +271,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (job) (rate(http_requests_total{job=~\"booking-service|payment-service|user-service\",status=~\"5..\"}[1m])) / sum by (job) (rate(http_requests_total{job=~\"booking-service|payment-service|user-service\"}[1m]))",
+          "expr": "sum by (job) (rate(http_requests_total{job=~\"(booking|payment|user|driver|notification)-service\",status=~\"5..\"}[1m])) / sum by (job) (rate(http_requests_total{job=~\"(booking|payment|user|driver|notification)-service\"}[1m]))",
           "legendFormat": "{{job}}"
         }
       ]
@@ -313,7 +313,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.5, sum by (job, le) (rate(http_request_duration_seconds_bucket{job=~\"booking-service|payment-service|user-service\"}[1m])))",
+          "expr": "histogram_quantile(0.5, sum by (job, le) (rate(http_request_duration_seconds_bucket{job=~\"(booking|payment|user|driver|notification)-service\"}[1m])))",
           "legendFormat": "{{job}} p50"
         },
         {
@@ -322,7 +322,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum by (job, le) (rate(http_request_duration_seconds_bucket{job=~\"booking-service|payment-service|user-service\"}[1m])))",
+          "expr": "histogram_quantile(0.95, sum by (job, le) (rate(http_request_duration_seconds_bucket{job=~\"(booking|payment|user|driver|notification)-service\"}[1m])))",
           "legendFormat": "{{job}} p95"
         },
         {
@@ -331,7 +331,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.99, sum by (job, le) (rate(http_request_duration_seconds_bucket{job=~\"booking-service|payment-service|user-service\"}[1m])))",
+          "expr": "histogram_quantile(0.99, sum by (job, le) (rate(http_request_duration_seconds_bucket{job=~\"(booking|payment|user|driver|notification)-service\"}[1m])))",
           "legendFormat": "{{job}} p99"
         }
       ]
