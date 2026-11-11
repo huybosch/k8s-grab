@@ -16,6 +16,7 @@ spec:
           - svc: payment
           - svc: user
           - svc: notification   # Final Project
+          - svc: driver         # Final Project
   template:
     metadata:
       name: "{{.svc}}"
