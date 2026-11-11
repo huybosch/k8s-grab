@@ -6,3 +6,6 @@ nodeFailureTolerationSeconds: 30
 pdb:
   enabled: true
   maxUnavailable: 1
+# Final Project - mọi service (không chỉ booking): đợi ingress-nginx/kube-proxy gỡ Pod khỏi endpoint TRƯỚC khi SIGTERM
+#   (Phase 12). Thiếu -> rollout user/payment làm rớt request (đo được 1/1770 ở lần rollout đầu)
+preStopSleepSeconds: 5
