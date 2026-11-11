@@ -1,0 +1,4 @@
+# TẠO BỞI ci/pipeline.ps1 - KHÔNG sửa tay. Image đang chạy ở prod cho driver (Argo CD đọc file này).
+image:
+  repository: localhost:5001/driver-service
+  tag: "0424fa18d0b7"
