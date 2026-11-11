@@ -32,6 +32,8 @@ function createDb() {
 app.set("db", null);
 const db = () => app.get("db") || app.set("db", createDb()).get("db");
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 app.get("/health", (req, res) => res.status(200).send("ok"));
 // /health KHÔNG kiểm tra DB: DB chết mà liveness fail -> kubelet restart toàn bộ Pod payment vô ích (DB vẫn chết)
 
@@ -40,9 +42,15 @@ app.post("/payment", async (req, res) => {
   if (!Number.isFinite(amount) || amount < 0) {
     return res.status(400).json({ service: "payment-service", error: "invalid amount" });
   }
-  const transactionId = randomUUID();
+  // Idempotency key: caller (booking) gửi paymentId -> gọi lại (retry) cùng paymentId KHÔNG ghi trừ tiền 2 lần.
+  // Không gửi -> tự sinh (mỗi lần gọi = 1 payment mới).
+  const paymentId = req.body && req.body.paymentId;
+  if (paymentId !== undefined && !UUID.test(String(paymentId))) {
+    return res.status(400).json({ service: "payment-service", error: "invalid paymentId" });
+  }
+  const transactionId = paymentId || randomUUID();
   try {
-    await db().query("INSERT INTO payments (id, amount) VALUES ($1, $2)", [transactionId, amount]);
+    await db().query("INSERT INTO payments (id, amount) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING", [transactionId, amount]);
   } catch (err) {
     console.error("payment insert failed:", err.code || err.message);
     return res.status(503).json({ service: "payment-service", version: VERSION, error: "database unavailable" });

@@ -9,13 +9,16 @@ process.env.NOTIFY_TIMEOUT_MS = "300";
 const app = require("./server");
 
 let server, base, fakePayment, fakePaymentUrl, fakeNotify, fakeNotifyUrl, notified = [];
+let dropNextPayment = 0, paymentBodies = [];
 
 before(async () => {
-  // payment-service giả: trả lại đúng body nhận được
+  // payment-service giả: trả lại đúng body nhận được. dropNextPayment > 0 -> cắt kết nối (giả lập Pod payment vừa tắt)
   fakePayment = http.createServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", () => {
+      paymentBodies.push(JSON.parse(body));
+      if (dropNextPayment > 0) { dropNextPayment--; return req.socket.destroy(); }
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ service: "payment-service", body: JSON.parse(body) }));
     });
@@ -64,11 +67,24 @@ test("POST /booking gọi payment và trả kết quả của payment", async ()
   const body = await r.json();
   assert.equal(body.service, "booking-service");
   assert.equal(body.payment.service, "payment-service");
-  assert.deepEqual(body.payment.body, { amount: 100 });
+  assert.deepEqual(body.payment.body, { amount: 100, paymentId: body.bookingId }, "paymentId (idempotency key) = bookingId");
   assert.match(body.bookingId, /^[0-9a-f-]{36}$/, "mỗi booking phải có bookingId (UUID)");
   assert.equal(body.notification.service, "notification-service");
   assert.equal(notified.at(-1).type, "booking-confirmed");
   assert.equal(notified.at(-1).bookingId, body.bookingId);
+});
+
+test("payment cắt kết nối lần 1 -> retry CÙNG paymentId -> 200", async () => {
+  process.env.PAYMENT_URL = fakePaymentUrl;
+  process.env.NOTIFICATION_URL = fakeNotifyUrl;
+  paymentBodies = [];
+  dropNextPayment = 1;
+  const r = await postBooking();
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.equal(paymentBodies.length, 2, "gọi payment đúng 2 lần");
+  assert.equal(paymentBodies[0].paymentId, paymentBodies[1].paymentId, "retry phải gửi lại CÙNG paymentId");
+  assert.equal(paymentBodies[1].paymentId, body.bookingId);
 });
 
 test("notification chết -> booking VẪN 200 (notification = null), không treo", async () => {
@@ -92,7 +108,7 @@ test("POST /booking trả 503 (không treo) khi payment không kết nối đư�
 
 test("GET /metrics có counter http_requests_total theo route + status", async () => {
   const text = await (await fetch(`${base}/metrics`)).text();
-  assert.match(text, /http_requests_total\{method="POST",route="\/booking",status="200"\} 2/);
+  assert.match(text, /http_requests_total\{method="POST",route="\/booking",status="200"\} 3/);
   assert.match(text, /http_requests_total\{method="POST",route="\/booking",status="503"\} 1/);
   assert.doesNotMatch(text, /route="\/health"/, "/health không được tính vào metrics");
 });

@@ -10,7 +10,10 @@ before(async () => {
   app.set("db", {
     query: async (sql, params) => {
       if (dbDown) throw Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
-      if (sql.startsWith("INSERT")) { rows.push(params); return { rows: [] }; }
+      if (sql.startsWith("INSERT")) {   // mô phỏng ON CONFLICT (id) DO NOTHING
+        if (!rows.some((r) => r[0] === params[0])) rows.push(params);
+        return { rows: [] };
+      }
       return { rows: [{ count: rows.length, total: rows.reduce((s, r) => s + r[1], 0) }] };
     },
   });
@@ -38,6 +41,17 @@ test("POST /payment ghi 1 dòng vào DB và trả transactionId", async () => {
   assert.deepEqual(rows.at(-1), [body.transactionId, 42]);
 });
 
+test("gọi lại cùng paymentId (retry) -> cùng transactionId, chỉ 1 dòng trong DB", async () => {
+  const paymentId = "6f1c1d2e-3b4a-4c5d-8e9f-0a1b2c3d4e5f";
+  const n = rows.length;
+  const a = await (await pay({ amount: 7, paymentId })).json();
+  const b = await (await pay({ amount: 7, paymentId })).json();
+  assert.equal(a.transactionId, paymentId);
+  assert.equal(b.transactionId, paymentId);
+  assert.equal(rows.length, n + 1);
+  assert.equal((await pay({ amount: 7, paymentId: "not-a-uuid" })).status, 400);
+});
+
 test("amount không hợp lệ -> 400, không ghi DB", async () => {
   const n = rows.length;
   assert.equal((await pay({ amount: -5 })).status, 400);
@@ -62,6 +76,6 @@ test("GET /payments/stats đếm từ DB", async () => {
 
 test("GET /metrics có counter của /payment", async () => {
   const text = await (await fetch(`${base}/metrics`)).text();
-  assert.match(text, /http_requests_total\{method="POST",route="\/payment",status="200"\} 1/);
+  assert.match(text, /http_requests_total\{method="POST",route="\/payment",status="200"\} 3/);
   assert.match(text, /http_requests_total\{method="POST",route="\/payment",status="503"\} 1/);
 });
