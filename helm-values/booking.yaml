@@ -10,4 +10,3 @@ env:
 probes:
   enabled: true
 terminationGracePeriodSeconds: 30
-preStopSleepSeconds: 5      # booking có SIGTERM handler + /slow (Phase 12)

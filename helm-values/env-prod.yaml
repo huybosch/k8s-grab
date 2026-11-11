@@ -7,5 +7,6 @@ pdb:
   enabled: true
   maxUnavailable: 1
 # Final Project - mọi service (không chỉ booking): đợi ingress-nginx/kube-proxy gỡ Pod khỏi endpoint TRƯỚC khi SIGTERM
-#   (Phase 12). Thiếu -> rollout user/payment làm rớt request (đo được 1/1770 ở lần rollout đầu)
-preStopSleepSeconds: 5
+#   (Phase 12). Đo được: không có preStop -> 1/1770 request lỗi; 5s -> 5/4795 khi 5 service rollout cùng lúc
+#   (kube-proxy/ingress-nginx cập nhật trễ hơn 5s). 10s + booking retry payment có idempotency key.
+preStopSleepSeconds: 10
