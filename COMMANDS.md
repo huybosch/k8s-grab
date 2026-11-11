@@ -1,18 +1,19 @@
-# Grab Mini - Command Reference (Phase 0 → Phase 23)
+# Grab Mini - Command Reference (Phase 0 → Phase 24)
 
 Nhật ký lab: mỗi **Scenario** = lệnh đã chạy thật + code liên quan + kết quả đã verify + bài học, theo đúng thứ tự làm. Giáo trình (học gì, vì sao) nằm ở [../Roadmap.md](../Roadmap.md).
 
-> **⚠️ Helm là nguồn sự thật của namespace `default`** (`charts/` + `helm-values/`), và **từ Phase 23, deploy app chỉ qua `./ci/pipeline.ps1 -Service <svc>`**. Các lệnh `kubectl apply -f k8s/...` trong Scenario 0-20 và `helm upgrade` tay trong Scenario 22 là **lịch sử** - chạy lại sẽ tạo drift hoặc quay về image cũ (`helm upgrade` thiếu `-f helm-values/<svc>-image.yaml` = về `<svc>-service:v1`). Muốn dựng lại môi trường: dùng [[#🔁 Dựng lại toàn bộ cluster từ đầu|🔁 Dựng lại toàn bộ cluster]].
+> **⚠️ Git (`github.com/huybosch/k8s-grab`, nhánh `main`) là nguồn sự thật của namespace `default`** - Argo CD sync `charts/` + `helm-values/` vào cluster (Phase 24). **Deploy app = `./ci/pipeline.ps1 -Service <svc>`** (commit tag + `git push`); sửa hạ tầng = sửa file + `git push`. Các lệnh `kubectl apply -f k8s/...` (Scenario 0-20), `helm upgrade`/`helm rollback` (Scenario 22-23) là **lịch sử** - chạy lại sẽ bị Argo CD selfHeal đè lại (hoặc tạo field lạ mà Argo CD không quản lý). Muốn dựng lại môi trường: dùng [[#🔁 Dựng lại toàn bộ cluster từ đầu|🔁 Dựng lại toàn bộ cluster]].
 
 ## 📊 Trạng thái hiện tại (11/11/2026)
 
 | Thành phần | Chi tiết | Quản lý bởi |
 |---|---|---|
 | Cluster | `kind` v0.33, `grab-mini`, 1 control-plane (port 80/443 ra host) + 2 worker - `kind-multi-node.yaml` | `kind` |
-| Code | `grab-mini/` là git repo **local** (nhánh `main`, không có remote); mỗi lần deploy = 1 commit `deploy(<svc>): <sha>` | `git` |
+| Code | `grab-mini/` = repo `github.com/huybosch/k8s-grab` (public, nhánh `main`); mỗi lần deploy = 1 commit `deploy(<svc>): <sha>`, rollback = commit `Revert ...` | `git` + GitHub Actions `ci.yaml` (test + build + chạy thử container) |
+| GitOps | Argo CD 3.6.1 (namespace `argocd`): `root` → AppProject `grab-mini`, ApplicationSet `grab-services` (booking/payment/user), `grab-platform`; poll Git 60s, selfHeal | Helm: `argocd` (`k8s/argocd/values.yaml`) + `kubectl apply -f argocd/root.yaml` (1 lần) |
 | Registry | `registry:2.8.3` container `kind-registry`, `localhost:5001` (trong cluster: `http://kind-registry:5000`) | `ci/setup-local-registry.ps1` |
-| App | `booking` (HPA 2-10), `payment` x3, `user` x3 - image `localhost:5001/<svc>-service:<git-sha>` (tag đang chạy: `helm-values/<svc>-image.yaml`); probe, PDB, topologySpread, failover 30s | `ci/pipeline.ps1` → Helm: `booking`, `payment`, `user` (chart `grab-service`) |
-| Platform | ConfigMap `booking-config`, Ingress `/users` `/booking` `/payment`, 5 NetworkPolicy (default-deny), CronJob `settlement-job`, StatefulSet `postgres` | Helm: `grab-platform` |
+| App | `booking` (HPA 2-10), `payment` x3, `user` x3 - image `localhost:5001/<svc>-service:<git-sha>` (tag đang chạy: `helm-values/<svc>-image.yaml`); probe, PDB, topologySpread, failover 30s | `ci/pipeline.ps1` → Git → Argo CD: `booking`, `payment`, `user` (chart `grab-service`) |
+| Platform | ConfigMap `booking-config`, Ingress `/users` `/booking` `/payment`, 5 NetworkPolicy (default-deny), CronJob `settlement-job`, StatefulSet `postgres` | Git → Argo CD: `grab-platform` (không prune) |
 | Secret | `booking-secret` | `kubectl create secret` (cố ý ngoài Git) |
 | Hạ tầng | `ingress-nginx` (+ patch nodeSelector), `metrics-server` (+ patch insecure-tls) | `kubectl apply` từ URL upstream |
 | Monitoring | `kube-prometheus-stack` 93.1.1, Loki 7.5.0, Alloy 1.15.0 (namespace `monitoring`) | Helm: `monitoring`, `loki`, `alloy` |
@@ -44,6 +45,7 @@ Nhật ký lab: mỗi **Scenario** = lệnh đã chạy thật + code liên quan
 - [[#Scenario 21 - Logs (Loki + Alloy) + Alert (PrometheusRule + Alertmanager) (Phase 21)|Scenario 21 - Logs (Loki + Alloy) + Alert (PrometheusRule + Alertmanager) (Phase 21)]]
 - [[#Scenario 22 - Helm: chart dùng chung + chuyển resource đang chạy sang Helm (Phase 22)|Scenario 22 - Helm: chart dùng chung + chuyển resource đang chạy sang Helm (Phase 22)]]
 - [[#Scenario 23 - CI/CD: pipeline local + local registry + tag theo git SHA (Phase 23)|Scenario 23 - CI/CD: pipeline local + local registry + tag theo git SHA (Phase 23)]]
+- [[#Scenario 24 - GitOps: Argo CD + app-of-apps, deploy = git push (Phase 24)|Scenario 24 - GitOps: Argo CD + app-of-apps, deploy = git push (Phase 24)]]
 - [[#Cleanup - xoá image Docker cũ không dùng|Cleanup - xoá image Docker cũ không dùng]]
 - [[#🔁 Dựng lại toàn bộ cluster từ đầu|🔁 Dựng lại toàn bộ cluster từ đầu]]
 - [[#🧠 Tổng hợp bài học|🧠 Tổng hợp bài học]]
@@ -2330,6 +2332,126 @@ git revert --no-edit HEAD
 
 ---
 
+<a id="scenario-24"></a>
+## Scenario 24 - GitOps: Argo CD + app-of-apps, deploy = git push (Phase 24)
+
+```text
+máy local: ci/pipeline.ps1 -Service <svc>                       GitHub: huybosch/k8s-grab (public)
+  1 test     npm ci + node --test                                  │  Actions ci.yaml: test -> build -> chạy thử container
+  2 build    docker build + CHẠY THỬ container (GET /health)       │  (KHÔNG push image, KHÔNG deploy)
+  3 push     localhost:5001/<svc>-service:<git-sha>                │
+  4 release  commit helm-values/<svc>-image.yaml + git push ──────►│ main
+  5 sync     đợi Argo CD: Synced@<commit> + Healthy + rollout       │
+  6 smoke    gọi qua Ingress                                        ▼ poll 60s (+ pipeline chủ động refresh)
+  lỗi 5/6 -> git revert <commit deploy> + git push            Argo CD (namespace argocd, trong cluster)
+                                                                 root ──► argocd/apps/ ──► AppProject grab-mini
+                                                                                       ├─► ApplicationSet ──► booking, payment, user
+                                                                                       └─► grab-platform
+```
+
+Pipeline **không còn ghi vào cluster** (không `helm upgrade`, không `kubectl apply`) - chỉ ghi vào Git. Argo CD kéo Git về, render chart bằng `helm template`, apply bằng server-side apply. Không có webhook (GitHub không vào được cluster trên máy cá nhân) → Argo CD poll Git mỗi 60s, pipeline annotate `argocd.argoproj.io/refresh` để khỏi đợi.
+
+```powershell
+cd D:\OBsidian\NUO3HC\Kubernetes\grab-mini
+
+# --- Bước 1: cài Argo CD (Helm, chart pin version) ---
+helm repo add argo https://argoproj.github.io/argo-helm
+helm upgrade --install argocd argo/argo-cd --version 10.16.0 -n argocd --create-namespace -f k8s/argocd/values.yaml --wait --timeout 5m
+# UI: kubectl port-forward svc/argocd-server -n argocd 8081:80  -> http://localhost:8081, user admin, password:
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | %{ [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) }
+
+# --- Bước 2: kiểm tra TRƯỚC khi Argo CD tiếp quản: render kiểu Argo CD (helm template) == manifest Helm đang chạy ---
+#   (khác 1 dòng = Argo CD apply khác = có thể rollout lại Pod)
+$s = "booking"; $a = helm template $s charts/grab-service -n default -f helm-values/$s.yaml -f helm-values/env-prod.yaml -f helm-values/booking-prod.yaml -f helm-values/$s-image.yaml
+(($a -join "`n").Trim() -eq ((helm get manifest $s) -join "`n").Trim())   # True (4/4 release)
+
+# --- Bước 3: đẩy repo lên GitHub (repo trống, public -> Argo CD đọc không cần token) ---
+git remote add origin https://github.com/huybosch/k8s-grab.git
+git push -u origin main
+
+# --- Bước 4: bootstrap - lệnh kubectl apply DUY NHẤT (chạy kèm traffic loop, ghi lại tên Pod trước/sau) ---
+kubectl apply -f argocd/root.yaml
+kubectl get applications -n argocd        # 5 app Synced Healthy
+
+# --- Bước 5: Helm "buông" release: xoá bản ghi release (Secret sh.helm.release.*) - KHÔNG xoá object nào ---
+#   còn để lại: `helm uninstall booking` sẽ xoá Deployment mà Argo CD đang quản lý; `helm rollback` đánh nhau với selfHeal
+kubectl delete secret -n default -l owner=helm
+helm list -n default                      # rỗng
+
+# --- Bước 6: dọn manager `helm` khỏi managedFields (lặp lại bài học #1 Scenario 23, xem bài học #3 dưới) ---
+./ci/migrate-field-managers.ps1 -ArgoApp booking,payment,user,grab-platform -LegacyManagers helm -DryRun
+./ci/migrate-field-managers.ps1 -ArgoApp booking,payment,user,grab-platform -LegacyManagers helm
+
+# --- Demo A: tính năng mới qua GitOps ---
+#   payment-service/server.js: thêm transactionId: randomUUID() (+ test) -> git commit
+./ci/pipeline.ps1 -Service payment
+
+# --- Demo B: selfHeal - sửa tay cluster ---
+kubectl delete svc user-service                                          # Argo CD tạo lại
+Set-Content $env:TEMP\p.json '{"data":{"DB_HOST":"hacked-host"}}'; kubectl patch cm booking-config --type merge --patch-file $env:TEMP\p.json   # đưa về "postgres"
+Set-Content $env:TEMP\p.json '{"data":{"HACKED":"by-hand"}}';      kubectl patch cm booking-config --type merge --patch-file $env:TEMP\p.json   # KHÔNG bị xoá (bài học #2)
+
+# --- Demo C: bản lỗi qua được test -> Argo CD sync -> timeout -> git revert ---
+#   user-service/Dockerfile: CMD ["node", "server.jss"] -> git commit
+./ci/pipeline.ps1 -Service user           # 5/6 timeout 180s -> git revert <deploy commit> + push -> Argo CD về tag cũ
+git revert --no-edit <commit sửa Dockerfile>; git push   # pipeline chỉ revert commit DEPLOY, commit code lỗi phải tự revert
+
+# --- xem trạng thái ---
+kubectl get applications -n argocd -o custom-columns=NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status,REV:.status.sync.revision
+git log --oneline -8
+```
+
+**📄 Code liên quan:**
+
+- `k8s/argocd/values.yaml` (mới) - `server.insecure: true` (UI qua port-forward HTTP), `timeout.reconciliation: 60s` (poll Git, mặc định 180s), `controller.diff.server.side: "true"` (so sánh Git/cluster bằng server-side dry-run - API server tự điền default, không OutOfSync giả ở `volumeClaimTemplates`), tắt Dex + notifications, request nhỏ cho kind.
+- `argocd/root.yaml` (mới) - Application `root` (project `default`) trỏ `path: argocd/apps`, `automated: {prune, selfHeal}`. Thêm/sửa/xoá app từ giờ = sửa file trong `argocd/apps/` rồi push.
+- `argocd/apps/project.yaml` (mới) - AppProject `grab-mini`: chỉ repo này, chỉ namespace `default`, `clusterResourceWhitelist: []` (app không được tạo ClusterRole/Namespace...). `sync-wave: "-1"` → tạo trước các Application dùng nó.
+- `argocd/apps/services.yaml` (mới) - ApplicationSet `grab-services`, generator `list` (booking/payment/user) → 3 Application dùng chung chart `charts/grab-service`:
+
+  ```yaml
+  helm:
+    releaseName: "{{.svc}}"          # PHẢI trùng tên release Helm cũ (label instance trong pod template)
+    valueFiles:
+      - "../../helm-values/{{.svc}}.yaml"
+      - ../../helm-values/env-prod.yaml
+      - "../../helm-values/{{.svc}}-prod.yaml"   # chỉ booking có
+      - "../../helm-values/{{.svc}}-image.yaml"  # pipeline ghi tag vào đây
+    ignoreMissingValueFiles: true
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [ServerSideApply=true]
+  ```
+
+- `argocd/apps/grab-platform.yaml` (mới) - như trên nhưng `prune: false`: chart có Postgres + PVC, lỡ xoá/đổi tên trong Git không được kéo theo xoá dữ liệu.
+- `ci/pipeline.ps1` (viết lại) - stage 4 `release`: ghi `helm-values/<svc>-image.yaml` (luôn LF) → commit `deploy(<svc>): <sha>` → `git push origin HEAD:main`. Stage 5 `Wait-ArgoSync`: annotate refresh, đợi `sync.revision == HEAD` + `Synced` + `Healthy` + không có operation `Running`, chốt bằng `kubectl rollout status` (chỉ đọc). Lỗi ở 5/6 → `git revert` commit deploy + push + đợi sync + smoke. Guard thêm: `argocd/` phải sạch, local không được tụt sau `origin/main`. Hàm mới `Test-Container`: `docker run` image vừa build, `docker exec ... wget /health` (port lấy từ `EXPOSE`), container thoát → in 5 dòng log cuối.
+- `ci/migrate-field-managers.ps1` - thêm `-ArgoApp`: lấy object từ `status.resources` của Application (Helm release đã bị xoá nên không còn `helm get manifest`).
+- `.github/workflows/ci.yaml` (viết lại) - chỉ **CI**: `changes` → `check` (matrix: `npm test` → build `load: true` → `container smoke (/health)`). Bỏ push GHCR + job `record` của Phase 23.
+
+**✅ Kết quả thật đã verify (11/11/2026):**
+
+- Argo CD 3.6.1 (chart 10.16.0) cài xong trong 77s, 6 Pod trên `grab-mini-worker`.
+- `helm template` (cách Argo CD render) **giống hệt từng byte** `helm get manifest` của cả 4 release → bootstrap `root`: 5 app `Synced Healthy` ở commit `a4fca91`; tên 12 Pod trước/sau **không đổi** (không rollout), traffic `/booking` **64/64 OK**. Deployment có annotation `argocd.argoproj.io/tracking-id: booking:apps/Deployment:default/booking`; managedFields: `helm` + `argocd-controller` cùng sở hữu.
+- Xoá 18 Secret `sh.helm.release.*` → `helm list` rỗng, Argo CD vẫn 5/5 `Synced Healthy`. `migrate-field-managers -LegacyManagers helm`: 20 object, `generation` Deployment trước/sau `21 30 16` / `21 30 16` (không rollout).
+- GitHub Actions: 6/6 run `success` (`changes` 6s, `check` 17-22s/service; bản thêm `container smoke (/health)` cũng pass cả 3).
+- **Demo A** (`transactionId`): 38s tổng (test 2.5s, build 3.4s, push 1.3s, release 3s, **sync 25s**, smoke 2s). Argo CD: `Synced@a4fca91 Healthy` → `Synced@ffdcc54 Progressing` → `Healthy`. Response có `"transactionId":"07be30ef-..."`. Traffic `/booking` (gọi qua payment) **345/345 OK**.
+- **Demo B** (selfHeal): xoá `Service user-service` → tạo lại sau **1s**; `DB_HOST=hacked-host` → về `postgres` sau **1s**; key lạ `HACKED` **vẫn còn sau 120s**, app vẫn `Synced` (managedFields: `kubectl-patch Update f:HACKED` - field không thuộc Argo CD). Phải tự xoá.
+- **Demo C** (`CMD server.jss`): test/build/push OK → commit `463a1ef` → `Synced@463a1ef Progressing` suốt **180s** (không bao giờ `Degraded`, xem bài học #4) → pipeline `git revert` → `f462f61` → `Synced Healthy` sau ~10s → smoke OK. Tổng 200s; 3 Pod `user` vẫn chạy `f7958a35c003` suốt quá trình; traffic `/users` **1132/1132 OK**. CI GitHub của commit lỗi cũng **success** (chỉ build, không chạy image) → thêm `Test-Container`: image lỗi bị bắt sau **0.5s** (`MODULE_NOT_FOUND`), 3 image tốt pass.
+- Chạy lại `booking` (code không đổi): ra tag mới `82affcb71c1a` (commit revert Demo C của Scenario 23 - cùng nội dung `5f5a024b8892`), 31s, sync 16s.
+
+> **Bài học quan trọng #1 - đổi công cụ quản lý (Helm → Argo CD) mà không restart Pod**: điều kiện là Argo CD render **giống hệt** manifest đang chạy - kiểm tra bằng `helm template` vs `helm get manifest` trước khi bootstrap. Bẫy cụ thể: `releaseName` phải trùng tên release cũ vì pod template có label `app.kubernetes.io/instance: {{ .Release.Name }}` (Argo CD mặc định dùng tên Application). Sau đó **Helm phải buông**: xoá Secret `sh.helm.release.*` (chỉ là bản ghi, không xoá object), nếu không `helm uninstall`/`helm rollback` vẫn tác động vào object của Argo CD.
+>
+> **Bài học quan trọng #2 - selfHeal chỉ sửa field Argo CD sở hữu**: với server-side apply/diff, Argo CD so sánh đúng các field nó đã apply. Xoá object hay đổi giá trị field có trong Git → về lại sau ~1s. Nhưng **thêm** field/key mới bằng tay (manager khác) → Argo CD không coi là drift, vẫn `Synced`. GitOps không thay được RBAC: muốn chặn sửa tay thì bỏ quyền ghi của người dùng vào namespace.
+>
+> **Bài học quan trọng #3 - field manager cũ chặn việc XOÁ field**: sau khi tiếp quản, `helm` vẫn đồng sở hữu mọi field. Đổi giá trị thì không sao (Argo CD dùng force), nhưng xoá 1 field khỏi Git thì server-side apply **không xoá trên cluster** vì manager `helm` vẫn giữ. Lần 2 gặp cùng 1 vấn đề (Scenario 23 là `kubectl` → Helm) → mỗi lần đổi công cụ quản lý: dọn manager cũ.
+>
+> **Bài học quan trọng #4 - rollback trong GitOps là `git revert`, và Argo CD không tự rollback**: Argo CD chỉ làm cho cluster giống Git - bản lỗi vẫn ở `Progressing` cho tới `progressDeadlineSeconds` (mặc định 600s) mới thành `Degraded`. Ai quyết định "lỗi" là pipeline (timeout 180s) → `git revert` commit deploy → Git lại đúng → Argo CD sync bản cũ. `helm rollback`/`kubectl rollout undo` sẽ bị selfHeal đè lại ngay. Lịch sử deploy + rollback nằm hết trong `git log`. Commit code lỗi vẫn phải revert riêng.
+>
+> **Bài học quan trọng #5 - bắt lỗi đóng gói trước khi deploy**: Demo C lọt qua `npm test` (chạy trên host) **và** CI GitHub (chỉ build). Chạy thử container + `/health` sau build tốn ~1s và chặn được lỗi trước khi tốn 3 phút chờ cluster.
+>
+> **Bài học quan trọng #6 - CI ở đâu, CD ở đâu**: runner GitHub không vào được cluster kind và cluster không kéo được image GHCR private. Nếu để CI commit tag `ghcr.io/...` như bản Phase 23 → Argo CD sync xong Pod `ImagePullBackOff`. Tách: GitHub Actions = kiểm tra (test + build + chạy thử), pipeline local = build/push registry local + commit tag. Trên cluster thật (EKS): CI push ECR/GHCR + commit tag, Argo CD trong cluster kéo về - không ai cần `kubeconfig` ngoài cluster.
+
+---
+
 <a id="cleanup"></a>
 ## Cleanup - xoá image Docker cũ không dùng
 
@@ -2380,15 +2502,18 @@ helm upgrade --install loki grafana/loki --version 7.5.0 -n monitoring -f k8s/mo
 helm upgrade --install alloy grafana/alloy --version 1.15.0 -n monitoring -f k8s/monitoring/alloy-values.yaml --wait
 kubectl apply -f k8s/monitoring/servicemonitor-apps.yaml -f k8s/monitoring/alerts-apps.yaml -f k8s/monitoring/alert-webhook.yaml -f k8s/monitoring/grab-mini-dashboard-cm.yaml
 
-# --- 5. app: Secret -> platform (ConfigMap, NetworkPolicy, Ingress, Postgres...) -> 3 service qua pipeline ---
+# --- 5. app: Secret (ngoài Git) -> Argo CD -> bootstrap 1 lệnh; Argo CD tự dựng platform + 3 service từ Git ---
 kubectl create secret generic booking-secret --from-literal=DB_USERNAME=admin --from-literal=DB_PASSWORD=change-me
-helm upgrade --install grab-platform charts/grab-platform --wait
-./ci/pipeline.ps1 -Service payment,user,booking      # cluster mới: Helm tự tạo object -> KHÔNG cần migrate-field-managers
-# (không có pipeline: helm upgrade --install <svc> charts/grab-service -f helm-values/<svc>.yaml -f helm-values/env-prod.yaml
-#   [-f helm-values/booking-prod.yaml] -f helm-values/<svc>-image.yaml --wait  - image phải có sẵn trong registry)
+helm repo add argo https://argoproj.github.io/argo-helm
+helm upgrade --install argocd argo/argo-cd --version 10.16.0 -n argocd --create-namespace -f k8s/argocd/values.yaml --wait --timeout 5m
+kubectl apply -f argocd/root.yaml
+# image tag lấy từ helm-values/<svc>-image.yaml trong Git -> image PHẢI còn trong registry kind-registry
+#   (mất registry: ./ci/pipeline.ps1 -Service payment,user,booking - build + push lại; tag không đổi -> không có commit mới)
+# cluster mới: Argo CD tự tạo object -> KHÔNG cần migrate-field-managers, không có release Helm nào để xoá
 
 # --- 6. verify ---
-helm list -A                                            # 7 release
+helm list -A                                            # 4 release: monitoring, loki, alloy, argocd
+kubectl get applications -n argocd                      # 5 app Synced Healthy
 kubectl get pods -o wide --sort-by=.spec.nodeName       # Pod trải đều worker / worker2
 curl.exe -s http://localhost/users
 curl.exe -s -X POST http://localhost/booking -H "Content-Type: application/json" -d '{"from":"A"}'   # có payload của payment
@@ -2483,6 +2608,19 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 | Local registry trên kind: containerd mặc định `config_path = ''` → phải bật + `hosts.toml` trên mọi node | [23](#scenario-23) |
 | `/tmp` của node kind là tmpfs - `docker cp` vào đó không thấy được; test script idempotent phải xoá trạng thái cũ trước | [23](#scenario-23) |
 | `$PSNativeCommandUseErrorActionPreference`: lệnh dọn dẹp trong `catch` cũng ném lỗi; `helm history` của release chưa có cũng lỗi → kiểm tra trước | [23](#scenario-23) |
+| Lỗi đóng gói lọt qua cả `npm test` lẫn CI chỉ-build → chạy thử container + `/health` sau build (~1s) | [24](#scenario-24) |
+| CI GitHub không được commit tag image mà cluster không kéo được (GHCR private → `ImagePullBackOff`) → tách CI (GitHub) / CD (registry local + Git) | [24](#scenario-24) |
+
+**GitOps (Argo CD)**
+
+| Bài học | Scenario |
+|---|---|
+| Tiếp quản không restart Pod: `helm template` phải giống hệt `helm get manifest`; `releaseName` = tên release cũ (label `instance` trong pod template) | [24](#scenario-24) |
+| Sau khi Argo CD tiếp quản: xoá Secret `sh.helm.release.*` (Helm buông) + dọn manager `helm` (nếu không, xoá field khỏi Git không xoá được trên cluster) | [24](#scenario-24) |
+| selfHeal chỉ sửa field Argo CD sở hữu: xoá object / đổi giá trị → về lại ~1s; **thêm** key bằng tay → vẫn `Synced`, không bị xoá | [24](#scenario-24) |
+| Rollback = `git revert` commit deploy; `helm rollback` bị selfHeal đè. Argo CD không tự rollback - bản lỗi `Progressing` tới `progressDeadlineSeconds` (600s) | [24](#scenario-24) |
+| Không có webhook → Argo CD poll Git (mặc định 180s, đặt 60s); pipeline annotate `argocd.argoproj.io/refresh` để sync ngay | [24](#scenario-24) |
+| `prune: true` cho app stateless, `prune: false` cho app có PVC/database | [24](#scenario-24) |
 
 **PowerShell / Windows**
 
@@ -2502,12 +2640,14 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 - `booking`/`payment` chưa thật sự query Postgres (mới có hạ tầng + `DB_*` env).
 - Image `<svc>-service:v1/v2/v3` (bản `kind load` cũ của Phase 2-21) vẫn còn trên node + Docker Desktop nhưng không còn dùng - prod chạy `localhost:5001/<svc>-service:<sha>`.
 
-**CI/CD**
-- Pipeline mới chạy **local**; `.github/workflows/ci.yaml` chưa chạy (chưa có repo GitHub, chưa có remote). Pipeline chưa chạy thử trường hợp cài **lần đầu** (release chưa tồn tại) - code đã xử lý nhưng chưa verify.
-- Test chạy trên host, chưa chạy **bên trong** image vừa build (bỏ sót lỗi kiểu Demo C tới tận lúc deploy); chưa scan lỗ hổng image (Trivy...).
-- Chưa có môi trường staging trong pipeline (deploy thẳng prod), chưa có bước chờ duyệt (approval).
+**CI/CD + GitOps**
+- CD vẫn chạy trên **máy local** (build/push registry local + `git push`); GitHub Actions chỉ kiểm tra. Chưa có registry chung mà cả GitHub lẫn cluster cùng dùng được.
+- Chưa scan lỗ hổng image (Trivy...); chưa có môi trường staging (deploy thẳng prod), chưa có approval / branch protection cho `main`.
+- Argo CD: chưa có webhook (poll 60s), chưa có notifications (Slack) khi sync lỗi, chưa đổi password admin / tắt user admin, chưa scrape metrics Argo CD vào Prometheus. Monitoring, ingress-nginx, metrics-server và chính Argo CD **chưa** được quản lý bằng Argo CD (vẫn Helm/kubectl tay).
+- `booking-secret` vẫn tạo tay (ngoài Git) → Argo CD không dựng lại được nếu thiếu; cần Sealed Secrets / External Secrets.
+- Chưa giảm `progressDeadlineSeconds` → Argo CD chỉ báo `Degraded` sau 10 phút.
+- Runbook dựng lại cluster bằng Argo CD (bước 5) chưa chạy thử trên cluster mới.
 - Registry không có volume: xoá container `kind-registry` = mất mọi image (kể cả bản đang chạy). Registry còn image rác (`registry-test`, `booking-service:989561244027` của Demo C) - `registry:2` mặc định tắt API xoá.
-- Chạy lại pipeline với tag không đổi vẫn tạo thêm 1 revision Helm (không có Pod nào đổi).
 
 **Vận hành**
 - `booking-secret` tạo tay → cân nhắc Sealed Secrets / External Secrets.
@@ -2523,4 +2663,4 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 - Runbook [🔁 Dựng lại toàn bộ cluster](#rebuild) chưa chạy trọn vẹn 1 lần liên tục.
 
 **Roadmap**
-- Phase 24 (GitOps / Argo CD), Final Project, Production Simulation (Incident 1-7).
+- Final Project, Production Simulation (Incident 1-7).
