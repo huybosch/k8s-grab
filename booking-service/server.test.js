@@ -5,9 +5,10 @@ const assert = require("node:assert/strict");
 const http = require("node:http");
 
 process.env.PAYMENT_TIMEOUT_MS = "500";
+process.env.NOTIFY_TIMEOUT_MS = "300";
 const app = require("./server");
 
-let server, base, fakePayment, fakePaymentUrl;
+let server, base, fakePayment, fakePaymentUrl, fakeNotify, fakeNotifyUrl, notified = [];
 
 before(async () => {
   // payment-service giả: trả lại đúng body nhận được
@@ -22,6 +23,19 @@ before(async () => {
   await new Promise((r) => fakePayment.listen(0, r));
   fakePaymentUrl = `http://127.0.0.1:${fakePayment.address().port}/payment`;
 
+  // notification-service giả: ghi lại body nhận được
+  fakeNotify = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      notified.push(JSON.parse(body));
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ service: "notification-service", notificationId: "n-1" }));
+    });
+  });
+  await new Promise((r) => fakeNotify.listen(0, r));
+  fakeNotifyUrl = `http://127.0.0.1:${fakeNotify.address().port}/notify`;
+
   server = app.listen(0);
   await new Promise((r) => server.once("listening", r));
   base = `http://127.0.0.1:${server.address().port}`;
@@ -30,6 +44,7 @@ before(async () => {
 after(() => {
   server.close();
   fakePayment.close();
+  fakeNotify.close();
 });
 
 const postBooking = () =>
@@ -43,6 +58,7 @@ test("GET /health trả 200", async () => {
 
 test("POST /booking gọi payment và trả kết quả của payment", async () => {
   process.env.PAYMENT_URL = fakePaymentUrl;
+  process.env.NOTIFICATION_URL = fakeNotifyUrl;
   const r = await postBooking();
   assert.equal(r.status, 200);
   const body = await r.json();
@@ -50,6 +66,19 @@ test("POST /booking gọi payment và trả kết quả của payment", async ()
   assert.equal(body.payment.service, "payment-service");
   assert.deepEqual(body.payment.body, { amount: 100 });
   assert.match(body.bookingId, /^[0-9a-f-]{36}$/, "mỗi booking phải có bookingId (UUID)");
+  assert.equal(body.notification.service, "notification-service");
+  assert.equal(notified.at(-1).type, "booking-confirmed");
+  assert.equal(notified.at(-1).bookingId, body.bookingId);
+});
+
+test("notification chết -> booking VẪN 200 (notification = null), không treo", async () => {
+  process.env.PAYMENT_URL = fakePaymentUrl;
+  process.env.NOTIFICATION_URL = "http://127.0.0.1:1/notify";
+  const t0 = Date.now();
+  const r = await postBooking();
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).notification, null);
+  assert.ok(Date.now() - t0 < 1000);
 });
 
 test("POST /booking trả 503 (không treo) khi payment không kết nối được", async () => {
@@ -63,7 +92,7 @@ test("POST /booking trả 503 (không treo) khi payment không kết nối đư�
 
 test("GET /metrics có counter http_requests_total theo route + status", async () => {
   const text = await (await fetch(`${base}/metrics`)).text();
-  assert.match(text, /http_requests_total\{method="POST",route="\/booking",status="200"\} 1/);
+  assert.match(text, /http_requests_total\{method="POST",route="\/booking",status="200"\} 2/);
   assert.match(text, /http_requests_total\{method="POST",route="\/booking",status="503"\} 1/);
   assert.doesNotMatch(text, /route="\/health"/, "/health không được tính vào metrics");
 });

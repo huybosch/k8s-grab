@@ -5,3 +5,11 @@ image:
 containerPort: 3001
 probes:
   enabled: true            # Phase 22 - bật probe (trước đây user không có)
+env:
+  REDIS_URL: redis://redis:6379   # Final Project - cache (Redis chết -> /users vẫn chạy, views = null)
+resources:                 # Final Project - mọi service đều có requests/limits (scheduler + chống memory leak lan ra node)
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi

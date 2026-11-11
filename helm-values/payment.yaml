@@ -6,3 +6,15 @@ containerPort: 3004
 preferredAntiAffinity: true   # Phase 19 - ví dụ soft anti-affinity
 probes:
   enabled: true            # Phase 22 - bật probe (trước đây payment không có)
+# Final Project - ghi PostgreSQL: DB_HOST/PORT/NAME từ ConfigMap, user/password RIÊNG của payment (Secret payment-db)
+envFrom:
+  - configMapRef:
+      name: booking-config
+  - secretRef:
+      name: payment-db
+resources:                 # Final Project - mọi service đều có requests/limits (scheduler + chống memory leak lan ra node)
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi

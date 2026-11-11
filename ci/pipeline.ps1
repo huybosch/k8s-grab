@@ -16,7 +16,7 @@ Yêu cầu: registry localhost:5001, Argo CD đã bootstrap (kubectl apply -f ar
 #>
 param(
   [Parameter(Mandatory)]
-  [ValidateSet("booking", "payment", "user")]
+  [ValidateSet("booking", "payment", "user", "driver", "notification")]
   [string[]]$Service,
   [string]$Registry = "localhost:5001",
   [int]$TimeoutSec = 180
@@ -36,10 +36,17 @@ function Invoke-Stage([string]$Name, [scriptblock]$Body) {
 # Đợi Argo CD: app đã sync ĐÚNG commit $Revision, Synced + Healthy, và Deployment rollout xong.
 # Không có webhook GitHub -> cluster nên "refresh" chủ động thay vì đợi chu kỳ poll (60s).
 function Wait-ArgoSync([string]$App, [string]$Revision) {
-  kubectl -n argocd annotate application $App argocd.argoproj.io/refresh=normal --overwrite | Out-Null
-  $deadline = (Get-Date).AddSeconds($TimeoutSec); $last = ""
+  $deadline = (Get-Date).AddSeconds($TimeoutSec); $last = ""; $refreshed = $false
   while ((Get-Date) -lt $deadline) {
-    $s = (kubectl -n argocd get application $App -o json | ConvertFrom-Json).status
+    # service MỚI: Application chưa có cho tới khi root sync ApplicationSet (commit này thêm element) -> refresh root, đợi
+    $json = kubectl -n argocd get application $App --ignore-not-found -o json
+    if (-not $json) {
+      if ($last -ne "missing") { Write-Host "    argocd $App : chưa có Application -> refresh root"; $last = "missing" }
+      kubectl -n argocd annotate application root argocd.argoproj.io/refresh=normal --overwrite | Out-Null
+      Start-Sleep -Seconds 3; continue
+    }
+    if (-not $refreshed) { kubectl -n argocd annotate application $App argocd.argoproj.io/refresh=normal --overwrite | Out-Null; $refreshed = $true }
+    $s = ($json | ConvertFrom-Json).status
     $now = "sync={0}@{1} health={2} op={3}" -f $s.sync.status, "$($s.sync.revision)".Substring(0, [Math]::Min(7, "$($s.sync.revision)".Length)), $s.health.status, $s.operationState.phase
     if ($now -ne $last) { Write-Host "    argocd $App : $now"; $last = $now }
     if ($s.health.status -eq "Degraded") { throw "Argo CD báo $App Degraded" }
@@ -81,14 +88,26 @@ function Test-Container([string]$Image) {
 function Test-Smoke([string]$Svc) {
   $req = switch ($Svc) {
     "user"    { @{ Uri = "http://localhost/users";   Method = "GET";  Expect = "user-service" } }
-    "payment" { @{ Uri = "http://localhost/payment"; Method = "POST"; Expect = "payment-service" } }
+    "payment" { @{ Uri = "http://localhost/payment"; Method = "POST"; Expect = '"transactionId"'; Body = '{"amount":1}' } }
     "booking" { @{ Uri = "http://localhost/booking"; Method = "POST"; Expect = '"payment":{"service":"payment-service"' } }
+    "driver"  { @{ Uri = "http://localhost/drivers"; Method = "GET";  Expect = "driver-service" } }
+    # notification KHÔNG có route Ingress (chỉ nội bộ) -> gọi từ trong 1 Pod booking (NetworkPolicy chỉ cho booking/driver vào)
+    "notification" { @{ Exec = "deploy/booking"; Uri = "http://notification-service/notify"; Method = "POST"; Expect = "notification-service"; Body = '{"type":"smoke-test"}' } }
   }
+  $body = if ($req.Body) { $req.Body } else { '{}' }
   for ($i = 1; $i -le 10; $i++) {
     try {
-      $r = Invoke-WebRequest -Uri $req.Uri -Method $req.Method -Body '{}' -ContentType "application/json" -UseBasicParsing -TimeoutSec 5
-      if ($r.StatusCode -eq 200 -and $r.Content.Contains($req.Expect)) { Write-Host "    $($req.Method) $($req.Uri) -> 200"; return }
-      Write-Host "    lần $i : HTTP $($r.StatusCode), nội dung không khớp"
+      if ($req.Exec) {
+        $PSNativeCommandUseErrorActionPreference = $false
+        $content = kubectl exec $req.Exec -- wget -qO- -T 5 --header "Content-Type: application/json" --post-data $body $req.Uri 2>&1
+        $PSNativeCommandUseErrorActionPreference = $true
+        if ($LASTEXITCODE -eq 0 -and "$content".Contains($req.Expect)) { Write-Host "    (từ $($req.Exec)) $($req.Method) $($req.Uri) -> ok"; return }
+        Write-Host "    lần $i : $content"
+      } else {
+        $r = Invoke-WebRequest -Uri $req.Uri -Method $req.Method -Body $body -ContentType "application/json" -UseBasicParsing -TimeoutSec 5
+        if ($r.StatusCode -eq 200 -and $r.Content.Contains($req.Expect)) { Write-Host "    $($req.Method) $($req.Uri) -> 200"; return }
+        Write-Host "    lần $i : HTTP $($r.StatusCode), nội dung không khớp"
+      }
     } catch { Write-Host "    lần $i : $($_.Exception.Message)" }
     Start-Sleep -Seconds 3
   }

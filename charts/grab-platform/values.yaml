@@ -1,8 +1,9 @@
 # grab-platform - mặc định = đúng cấu hình PROD đang chạy (namespace default)
 #   prod: helm upgrade --install grab-platform charts/grab-platform
 #   dev : helm upgrade --install grab-platform charts/grab-platform -n grab-dev -f helm-values/platform-dev.yaml
-# Secret booking-secret KHÔNG nằm trong chart (không commit password vào Git) - vẫn tạo bằng
+# Secret KHÔNG nằm trong chart (không commit password vào Git) - tạo tay trong mỗi namespace:
 #   kubectl create secret generic booking-secret -n <ns> --from-literal=DB_USERNAME=... --from-literal=DB_PASSWORD=...
+#   kubectl create secret generic payment-db     -n <ns> --from-literal=DB_USERNAME=payment --from-literal=DB_PASSWORD=<random>
 
 bookingConfig:
   name: booking-config
@@ -21,15 +22,28 @@ ingress:
       service: user-service
     - path: /booking
       service: booking-service
-    - path: /payment
+    - path: /payment          # Prefix -> gồm cả /payments/stats
       service: payment-service
+    - path: /drivers
+      service: driver-service
 
-# Phase 20 + 21 - zero-trust
+# Phase 20 + 21 + Final Project - zero-trust: default-deny + chỉ mở đúng các luồng trong sơ đồ
 networkPolicies:
   enabled: true
-  appPorts: [3001, 3003, 3004]
   ingressControllerNamespace: ingress-nginx
   monitoringNamespace: monitoring
+  appPorts:                # label app -> containerPort (port trong NetworkPolicy là port CONTAINER, không phải port Service)
+    user: 3001
+    driver: 3002
+    booking: 3003
+    payment: 3004
+    notification: 3005
+  public: [user, booking, payment, driver]   # có route Ingress -> ingress-nginx vào được. notification: chỉ nội bộ
+  allow:                   # mỗi dòng -> 1 NetworkPolicy "allow-<from>-to-<to>"
+    - { to: payment, from: [booking], port: 3004 }
+    - { to: notification, from: [booking, driver], port: 3005 }
+    - { to: postgres, from: [payment, db-init], port: 5432 }   # booking KHÔNG còn vào DB (không dùng)
+    - { to: redis, from: [user], port: 6379 }
 
 settlement:
   enabled: true
@@ -43,3 +57,14 @@ postgres:
   database: grabmini
   password: change-me      # CHỈ cho lab - production dùng Secret / External Secrets
   storage: 1Gi
+
+# Final Project - Job tạo user DB "payment" + bảng payments (xem templates/db-init.yaml)
+dbInit:
+  enabled: true
+  secretName: payment-db
+
+# Final Project - cache cho user-service
+redis:
+  enabled: true
+  image: redis:7.4-alpine
+  maxmemory: 64mb

@@ -1,0 +1,2 @@
+# Override riêng cho notification ở PROD: 2 replica (theo sơ đồ Final Project), không quan trọng bằng booking/payment
+replicaCount: 2

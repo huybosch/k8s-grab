@@ -5,11 +5,8 @@ image:
 containerPort: 3003
 env:
   VERSION: v1
-envFrom:
-  - configMapRef:
-      name: booking-config
-  - secretRef:
-      name: booking-secret
+# Final Project: booking KHÔNG truy cập DB (chỉ payment ghi DB) -> bỏ envFrom booking-config + booking-secret
+#   (least privilege: Pod booking bị chiếm cũng không có password DB; NetworkPolicy cũng không cho vào postgres)
 probes:
   enabled: true
 terminationGracePeriodSeconds: 30

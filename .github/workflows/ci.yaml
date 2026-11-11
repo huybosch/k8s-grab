@@ -13,9 +13,9 @@ name: ci
 on:
   push:
     branches: [main]
-    paths: ["booking-service/**", "payment-service/**", "user-service/**", ".github/workflows/ci.yaml"]
+    paths: ["*-service/**", ".github/workflows/ci.yaml"]
   pull_request:
-    paths: ["booking-service/**", "payment-service/**", "user-service/**", ".github/workflows/ci.yaml"]
+    paths: ["*-service/**", ".github/workflows/ci.yaml"]
 
 permissions:
   contents: read
@@ -38,6 +38,8 @@ jobs:
             booking: [booking-service/**, .github/workflows/ci.yaml]
             payment: [payment-service/**, .github/workflows/ci.yaml]
             user: [user-service/**, .github/workflows/ci.yaml]
+            driver: [driver-service/**, .github/workflows/ci.yaml]
+            notification: [notification-service/**, .github/workflows/ci.yaml]
 
   check:
     needs: changes

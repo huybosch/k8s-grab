@@ -12,7 +12,7 @@ spec:
   policyTypes:
     - Ingress
 ---
-# Phase 20 - ingress-nginx controller -> 3 app
+# Phase 20 - ingress-nginx controller -> các app public (có route Ingress)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -24,7 +24,7 @@ spec:
     matchExpressions:
       - key: app
         operator: In
-        values: ["user", "booking", "payment"]
+        values: {{ toJson $np.public }}
   policyTypes:
     - Ingress
   ingress:
@@ -36,59 +36,12 @@ spec:
             matchLabels:
               app.kubernetes.io/component: controller
       ports:
-        {{- range $np.appPorts }}
+        {{- range $np.public }}
         - protocol: TCP
-          port: {{ . }}
+          port: {{ required (printf "networkPolicies.appPorts thiếu %s" .) (index $np.appPorts .) }}
         {{- end }}
 ---
-# Phase 20 - booking -> payment
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-booking-to-payment
-  labels:
-    {{- include "grab-platform.labels" . | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-      app: payment
-  policyTypes:
-    - Ingress
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app: booking
-      ports:
-        - protocol: TCP
-          port: 3004
----
-# Phase 20 - chỉ booking + payment vào được postgres
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-booking-payment-to-postgres
-  labels:
-    {{- include "grab-platform.labels" . | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-      app: postgres
-  policyTypes:
-    - Ingress
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app: booking
-        - podSelector:
-            matchLabels:
-              app: payment
-      ports:
-        - protocol: TCP
-          port: 5432
----
-# Phase 21 - Prometheus (namespace monitoring) scrape /metrics
+# Phase 21 - Prometheus (namespace monitoring) scrape /metrics của MỌI app
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -100,7 +53,7 @@ spec:
     matchExpressions:
       - key: app
         operator: In
-        values: ["user", "booking", "payment"]
+        values: {{ toJson (keys $np.appPorts | sortAlpha) }}
   policyTypes:
     - Ingress
   ingress:
@@ -112,8 +65,34 @@ spec:
             matchLabels:
               app.kubernetes.io/name: prometheus
       ports:
-        {{- range $np.appPorts }}
+        {{- range $app := keys $np.appPorts | sortAlpha }}
         - protocol: TCP
-          port: {{ . }}
+          port: {{ index $np.appPorts $app }}
         {{- end }}
+{{- range $np.allow }}
+---
+# Luồng nội bộ: {{ join ", " .from }} -> {{ .to }}:{{ .port }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-{{ join "-" .from }}-to-{{ .to }}
+  labels:
+    {{- include "grab-platform.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .to }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- range .from }}
+        - podSelector:
+            matchLabels:
+              app: {{ . }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .port }}
+{{- end }}
 {{- end }}

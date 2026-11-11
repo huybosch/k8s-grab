@@ -1,0 +1,56 @@
+{{- if and .Values.postgres.enabled .Values.dbInit.enabled }}
+# Final Project - tạo user DB "payment" + bảng payments. Idempotent (chạy lại bao nhiêu lần cũng được).
+#   - Argo CD: hook PostSync -> chạy SAU khi mọi resource của grab-platform (gồm postgres) đã Healthy, mỗi lần sync
+#   - helm install/upgrade tay: hook post-install/post-upgrade (Helm hiểu annotation helm.sh/hook; Argo CD cũng map được)
+# Password user "payment" lấy từ Secret payment-db (tạo tay, ngoài Git - giống booking-secret):
+#   kubectl create secret generic payment-db --from-literal=DB_USERNAME=payment --from-literal=DB_PASSWORD=<random>
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-init
+  labels:
+    {{- include "grab-platform.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation   # xoá Job cũ trước khi tạo Job mới (Job spec bất biến)
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 6
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app: db-init        # NetworkPolicy chỉ cho app=payment và app=db-init vào postgres
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: psql
+          image: {{ .Values.postgres.image }}
+          env:
+            - { name: PGHOST, value: postgres }
+            - { name: PGDATABASE, value: {{ .Values.postgres.database | quote }} }
+            - { name: PGUSER, value: postgres }
+            - { name: PGPASSWORD, value: {{ .Values.postgres.password | quote }} }   # superuser - CHỈ Job này dùng
+            - name: APP_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.dbInit.secretName }}, key: DB_PASSWORD }
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -e
+              until pg_isready -q; do echo "waiting for postgres"; sleep 2; done
+              psql -v ON_ERROR_STOP=1 -v app_password="$APP_PASSWORD" <<'SQL'
+              SELECT 'CREATE ROLE payment LOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'payment') \gexec
+              ALTER ROLE payment PASSWORD :'app_password';
+              CREATE TABLE IF NOT EXISTS payments (
+                id         uuid PRIMARY KEY,
+                amount     numeric(12, 2) NOT NULL CHECK (amount >= 0),
+                created_at timestamptz NOT NULL DEFAULT now()
+              );
+              GRANT SELECT, INSERT ON payments TO payment;
+              SQL
+              echo "db-init done"
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+{{- end }}

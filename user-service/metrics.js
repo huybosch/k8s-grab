@@ -1,4 +1,4 @@
-// Phase 21 - Prometheus metrics (dùng chung cho booking / payment / user - mỗi service 1 bản copy)
+// Phase 21 - Prometheus metrics (mỗi service 1 bản copy giống hệt: booking, payment, user, driver, notification)
 const client = require("prom-client");
 
 client.collectDefaultMetrics(); // CPU, memory, event loop lag, GC... của process Node.js

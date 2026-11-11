@@ -12,6 +12,26 @@ const BUGGY = process.env.BUGGY === "true";
 const PAYMENT_TIMEOUT_MS = Number(process.env.PAYMENT_TIMEOUT_MS || 2000);
 // Phase 23: đọc mỗi request (không phải lúc load) để test trỏ được sang payment giả
 const paymentUrl = () => process.env.PAYMENT_URL || "http://payment-service/payment";
+const NOTIFY_TIMEOUT_MS = Number(process.env.NOTIFY_TIMEOUT_MS || 1000);
+const notificationUrl = () => process.env.NOTIFICATION_URL || "http://notification-service/notify";
+
+// Final Project: báo notification-service. Phụ thuộc KHÔNG quan trọng (khác payment):
+// lỗi/timeout -> trả null, booking vẫn thành công. Timeout ngắn hơn payment để không kéo dài request.
+async function notify(payload) {
+  try {
+    const r = await fetch(notificationUrl(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(NOTIFY_TIMEOUT_MS),
+    });
+    if (!r.ok) throw new Error(`notification-service HTTP ${r.status}`);
+    return await r.json();
+  } catch (err) {
+    console.error("notify failed:", err.name === "TimeoutError" ? `timeout ${NOTIFY_TIMEOUT_MS}ms` : (err.cause && err.cause.code) || err.message);
+    return null;
+  }
+}
 
 let healthy = true;
 app.get("/health", (req, res) => res.status(healthy ? 200 : 500).send(healthy ? "ok" : "fail"));
@@ -32,7 +52,9 @@ app.post("/booking", async (req, res) => {
     });
     if (!r.ok) throw new Error(`payment-service HTTP ${r.status}`);
     const payment = await r.json();
-    res.json({ service: "booking-service", version: VERSION, bookingId: randomUUID(), payment });
+    const bookingId = randomUUID();
+    const notification = await notify({ type: "booking-confirmed", bookingId, transactionId: payment.transactionId });
+    res.json({ service: "booking-service", version: VERSION, bookingId, payment, notification });
   } catch (err) {
     const detail = err.name === "TimeoutError" ? `timeout ${PAYMENT_TIMEOUT_MS}ms` : (err.cause && err.cause.code) || err.message;
     console.error("payment call failed:", detail);

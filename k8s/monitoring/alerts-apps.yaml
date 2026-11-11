@@ -10,9 +10,9 @@ spec:
       rules:
         - alert: GrabMiniHighErrorRate
           expr: |
-            sum by (job) (rate(http_requests_total{job=~"booking-service|payment-service|user-service",status=~"5.."}[1m]))
+            sum by (job) (rate(http_requests_total{job=~"(booking|payment|user|driver|notification)-service",status=~"5.."}[1m]))
               /
-            sum by (job) (rate(http_requests_total{job=~"booking-service|payment-service|user-service"}[1m]))
+            sum by (job) (rate(http_requests_total{job=~"(booking|payment|user|driver|notification)-service"}[1m]))
               > 0.05
           for: 1m
           labels:
@@ -21,7 +21,7 @@ spec:
             summary: "{{ $labels.job }}: error rate {{ $value | humanizePercentage }} (> 5%)"
         - alert: GrabMiniHighLatencyP95
           expr: |
-            histogram_quantile(0.95, sum by (job, le) (rate(http_request_duration_seconds_bucket{job=~"booking-service|payment-service|user-service"}[1m])))
+            histogram_quantile(0.95, sum by (job, le) (rate(http_request_duration_seconds_bucket{job=~"(booking|payment|user|driver|notification)-service"}[1m])))
               > 1
           for: 1m
           labels:
@@ -42,7 +42,7 @@ spec:
           annotations:
             summary: "Pod {{ $labels.pod }} restart {{ $value | humanize }} lần trong 10 phút"
         - alert: GrabMiniTargetDown
-          expr: up{job=~"booking-service|payment-service|user-service"} == 0
+          expr: up{job=~"(booking|payment|user|driver|notification)-service"} == 0
           for: 1m
           labels:
             severity: critical

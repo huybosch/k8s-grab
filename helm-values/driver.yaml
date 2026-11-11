@@ -1,0 +1,13 @@
+# driver-service - giá trị riêng của service (Final Project)
+app: driver
+image:
+  repository: localhost:5001/driver-service
+containerPort: 3002
+probes:
+  enabled: true
+resources:                 # Final Project - mọi service đều có requests/limits (scheduler + chống memory leak lan ra node)
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi

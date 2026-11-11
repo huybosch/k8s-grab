@@ -1,0 +1,13 @@
+# notification-service - giá trị riêng của service (Final Project). Chỉ nội bộ: không có route Ingress
+app: notification
+image:
+  repository: localhost:5001/notification-service
+containerPort: 3005
+probes:
+  enabled: true
+resources:                 # Final Project - mọi service đều có requests/limits (scheduler + chống memory leak lan ra node)
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
