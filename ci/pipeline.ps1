@@ -57,6 +57,26 @@ function Wait-ArgoSync([string]$App, [string]$Revision) {
   throw "Argo CD chưa sync $App về $($Revision.Substring(0,7)) Synced/Healthy sau ${TimeoutSec}s"
 }
 
+# Chạy thử IMAGE vừa build (không phải code): bắt lỗi Dockerfile/entrypoint mà npm test không thấy
+# (Phase 24 demo C: CMD server.jss qua được test + build, chỉ lộ ra khi Pod CrashLoop sau 3 phút chờ Argo CD)
+function Test-Container([string]$Image) {
+  $port = (docker inspect $Image --format '{{range $p, $_ := .Config.ExposedPorts}}{{$p}}{{end}}') -replace '/tcp', ''
+  $cid = docker run -d $Image
+  try {
+    for ($i = 1; $i -le 10; $i++) {
+      Start-Sleep -Milliseconds 500
+      if ((docker inspect $cid --format '{{.State.Running}}') -ne "true") {
+        throw "container thoát ngay (exit $(docker inspect $cid --format '{{.State.ExitCode}}')):`n$((docker logs $cid 2>&1 | Select-Object -Last 5) -join "`n")"
+      }
+      $PSNativeCommandUseErrorActionPreference = $false
+      $body = docker exec $cid wget -qO- "http://127.0.0.1:$port/health" 2>$null
+      $PSNativeCommandUseErrorActionPreference = $true
+      if ($body -eq "ok") { Write-Host "    container: GET :$port/health -> ok"; return }
+    }
+    throw "container không trả /health sau 5s"
+  } finally { docker rm -f $cid | Out-Null }
+}
+
 # Smoke test: gọi qua Ingress như người dùng thật (retry vì ingress-nginx cần vài giây nhận endpoint mới)
 function Test-Smoke([string]$Svc) {
   $req = switch ($Svc) {
@@ -100,6 +120,7 @@ foreach ($svc in $Service) {
 
   Invoke-Stage "2/6 build" {
     docker build -q -t $image --label "org.opencontainers.image.revision=$sha" "./$svc-service"
+    Test-Container $image
   }
 
   Invoke-Stage "3/6 push image" {

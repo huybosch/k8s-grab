@@ -67,4 +67,23 @@ jobs:
         with:
           context: ${{ matrix.service }}-service
           push: false
+          load: true   # nạp image vào docker của runner để chạy thử ở bước sau
           tags: ${{ matrix.service }}-service:${{ github.sha }}
+
+      # Chạy thử IMAGE (không chỉ code): bắt lỗi Dockerfile/entrypoint mà npm test không thấy (Phase 24 demo C)
+      - name: container smoke (/health)
+        run: |
+          image="${{ matrix.service }}-service:${{ github.sha }}"
+          port=$(docker inspect "$image" --format '{{range $p, $_ := .Config.ExposedPorts}}{{$p}}{{end}}' | cut -d/ -f1)
+          cid=$(docker run -d "$image")
+          trap 'docker rm -f "$cid" >/dev/null' EXIT
+          for i in $(seq 10); do
+            sleep 0.5
+            if [ "$(docker inspect "$cid" --format '{{.State.Running}}')" != "true" ]; then
+              echo "::error::container thoát ngay"; docker logs "$cid"; exit 1
+            fi
+            if [ "$(docker exec "$cid" wget -qO- "http://127.0.0.1:$port/health" 2>/dev/null)" = "ok" ]; then
+              echo "GET :$port/health -> ok"; exit 0
+            fi
+          done
+          echo "::error::container không trả /health sau 5s"; docker logs "$cid"; exit 1
