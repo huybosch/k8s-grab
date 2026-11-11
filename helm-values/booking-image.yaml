@@ -1,4 +1,4 @@
-# TẠO BỞI ci/pipeline.ps1 - KHÔNG sửa tay. Image đang chạy ở prod cho booking.
+# TẠO BỞI ci/pipeline.ps1 - KHÔNG sửa tay. Image đang chạy ở prod cho booking (Argo CD đọc file này).
 image:
   repository: localhost:5001/booking-service
-  tag: "5f5a024b8892"
+  tag: "82affcb71c1a"
