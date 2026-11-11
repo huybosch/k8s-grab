@@ -1,4 +1,5 @@
-# Phase 24 - 3 service dùng chung chart grab-service -> 1 ApplicationSet sinh ra 3 Application
+# Phase 24 - mọi service dùng chung chart grab-service -> 1 ApplicationSet sinh ra 1 Application / service
+# Thêm service mới = thêm 1 dòng vào elements + helm-values/<svc>.yaml
 # Giá trị = đúng các file pipeline Phase 23 đã dùng: <svc>.yaml + env-prod.yaml (+ <svc>-prod.yaml) + <svc>-image.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
@@ -14,6 +15,7 @@ spec:
           - svc: booking
           - svc: payment
           - svc: user
+          - svc: notification   # Final Project
   template:
     metadata:
       name: "{{.svc}}"
