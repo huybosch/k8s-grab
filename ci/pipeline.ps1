@@ -113,7 +113,8 @@ foreach ($svc in $Service) {
 image:
   repository: $Registry/$svc-service
   tag: "$sha"
-"@ | Set-Content -Encoding utf8NoBOM $valuesImage
+"@ -replace "`r`n", "`n" | Set-Content -NoNewline -Encoding utf8NoBOM $valuesImage   # file .ps1 là CRLF -> here-string cũng CRLF; file YAML trong Git là LF
+    Add-Content -NoNewline -Value "`n" $valuesImage
     git add $valuesImage
     if (git diff --cached --name-only) {
       git commit -q -m "deploy($svc): $sha"

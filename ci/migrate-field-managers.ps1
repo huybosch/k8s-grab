@@ -9,9 +9,14 @@ Field vẫn giữ nguyên giá trị, chỉ đổi "ai sở hữu".
 
   ./ci/migrate-field-managers.ps1 -Release payment,user,booking,grab-platform -DryRun
   ./ci/migrate-field-managers.ps1 -Release payment,user,booking,grab-platform
+
+Phase 24 - lặp lại y hệt khi Argo CD tiếp quản từ Helm: manager `helm` còn đồng sở hữu field
+-> xoá field khỏi Git thì Argo CD (server-side apply) KHÔNG xoá được trên cluster. Lấy object từ Argo CD Application:
+  ./ci/migrate-field-managers.ps1 -ArgoApp booking,payment,user,grab-platform -LegacyManagers helm -DryRun
 #>
 param(
-  [Parameter(Mandatory)][string[]]$Release,
+  [Parameter(Mandatory, ParameterSetName = "helm")][string[]]$Release,
+  [Parameter(Mandatory, ParameterSetName = "argo")][string[]]$ArgoApp,
   [string[]]$LegacyManagers = @("kubectl-client-side-apply", "kubectl-patch", "kubectl-autoscale"),
   [switch]$DryRun
 )
@@ -20,8 +25,14 @@ $PSNativeCommandUseErrorActionPreference = $true
 $legacyJson = ConvertTo-Json -Compress @($LegacyManagers)
 $tmp = New-TemporaryFile
 
-foreach ($r in $Release) {
-  $objects = helm get manifest $r | kubectl get -f - -o json --show-managed-fields | jq -c '(.items // [.])[]'
+foreach ($r in @($Release) + @($ArgoApp) | Where-Object { $_ }) {
+  if ($Release) {
+    $objects = helm get manifest $r | kubectl get -f - -o json --show-managed-fields | jq -c '(.items // [.])[]'
+  } else {
+    # status.resources = mọi object Argo CD đang quản lý cho app này
+    $objects = kubectl get application $r -n argocd -o json | jq -r '.status.resources[] | "\(.kind)/\(.name) \(.namespace)"' |
+      ForEach-Object { $k, $ns = $_ -split ' '; kubectl get $k -n $ns -o json --show-managed-fields | jq -c '.' }
+  }
   foreach ($o in $objects) {
     $ref = $o | jq -r '"\(.kind)/\(.metadata.name) -n \(.metadata.namespace)"'
     $before = $o | jq -r '[.metadata.managedFields[].manager] | unique | join(",")'
