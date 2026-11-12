@@ -17,6 +17,13 @@ ingress:
   name: grab-mini-ingress
   className: nginx
   host: ""                 # "" = mọi host (prod). Dev dùng host riêng để không đụng route của prod
+  # Incident 4: node chết -> SYN tới Pod trên node đó rơi mất -> mặc định nginx treo tới proxy-connect-timeout 5s rồi 504/timeout.
+  # 1s + thử Pod khác: request CHƯA được gửi (mới đang kết nối) nên retry an toàn cả với POST.
+  # (đã gửi rồi mà mất kết nối -> nginx KHÔNG retry POST - non_idempotent không bật, đúng ý: tránh trừ tiền 2 lần)
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "1"
+    nginx.ingress.kubernetes.io/proxy-next-upstream: "error timeout"
+    nginx.ingress.kubernetes.io/proxy-next-upstream-tries: "3"
   routes:
     - path: /users
       service: user-service

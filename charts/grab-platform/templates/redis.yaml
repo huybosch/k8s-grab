@@ -32,6 +32,10 @@ spec:
       labels:
         app: redis
     spec:
+      # Incident 4: mặc định 300s -> node chết = /users mất views 5 phút. 30s như các service (env-prod nodeFailureTolerationSeconds)
+      tolerations:
+        - { key: node.kubernetes.io/not-ready, operator: Exists, effect: NoExecute, tolerationSeconds: 30 }
+        - { key: node.kubernetes.io/unreachable, operator: Exists, effect: NoExecute, tolerationSeconds: 30 }
       containers:
         - name: redis
           image: {{ .Values.redis.image }}
