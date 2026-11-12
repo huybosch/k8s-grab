@@ -1,4 +1,4 @@
 # TẠO BỞI ci/pipeline.ps1 - KHÔNG sửa tay. Image đang chạy ở prod cho user (Argo CD đọc file này).
 image:
   repository: localhost:5001/user-service
-  tag: "17dbb0748a4a"
+  tag: "54c2ee3fa934"
