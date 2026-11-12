@@ -18,6 +18,8 @@ spec:
         app.kubernetes.io/name: {{ .Values.app }}
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      # Incident 7: không service nào gọi Kubernetes API -> không mount token (Pod bị chiếm cũng không có credential cluster)
+      automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
       {{- with .Values.terminationGracePeriodSeconds }}
       terminationGracePeriodSeconds: {{ . }}
       {{- end }}

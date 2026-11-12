@@ -18,6 +18,9 @@ image:
 replicaCount: 1
 containerPort: 3000
 
+# Incident 7 - mặc định KHÔNG mount ServiceAccount token (bật lại chỉ khi service thật sự cần gọi Kubernetes API)
+automountServiceAccountToken: false
+
 env: {}                   # map NAME: value -> env
 envFrom: []               # ví dụ: [{configMapRef: {name: booking-config}}]
 

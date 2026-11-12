@@ -49,6 +49,10 @@ app.get("/users", async (req, res) => {
 // Phase 23: chỉ listen khi chạy trực tiếp; khi test thì require("./server") lấy app
 if (require.main === module) {
   const server = app.listen(PORT, () => console.log(`user-service ${VERSION} listening on ${PORT}`));
+  // nginx giữ kết nối upstream 60s; Node mặc định đóng kết nối rảnh sau 5s -> race: nginx gửi request vào kết nối Node vừa đóng
+  // -> 502 'upstream prematurely closed' (gặp 1 lần ở Incident 7, POST không được retry). Server phải giữ LÂU HƠN proxy.
+  server.keepAliveTimeout = 65000;
+  server.headersTimeout = 66000;
   process.on("SIGTERM", () => server.close(() => process.exit(0)));
 }
 
