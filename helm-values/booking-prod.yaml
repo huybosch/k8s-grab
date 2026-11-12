@@ -8,9 +8,9 @@ resources:
     memory: "512Mi"
 autoscaling:
   enabled: true
-  minReplicas: 2
+  minReplicas: 3          # Incident 1: 2 Pod -> mất 1 = mất 50% công suất; 3 Pod -> mất 33%
   maxReplicas: 10
   targetCPUUtilizationPercentage: 50
 pdb:
-  minAvailable: 1
+  minAvailable: 2
   maxUnavailable: null

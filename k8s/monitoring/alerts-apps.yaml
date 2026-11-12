@@ -29,18 +29,29 @@ spec:
           annotations:
             summary: "{{ $labels.job }}: p95 latency {{ $value | humanizeDuration }} (> 1s)"
         - alert: GrabMiniNoPodsAvailable
-          expr: kube_deployment_status_replicas_available{namespace="default",deployment=~"booking|payment|user"} == 0
+          expr: kube_deployment_status_replicas_available{namespace="default",deployment=~"booking|payment|user|driver|notification|redis"} == 0
           for: 30s
           labels:
             severity: critical
           annotations:
             summary: "Deployment {{ $labels.deployment }} không còn Pod available nào"
         - alert: GrabMiniPodRestarting
-          expr: increase(kube_pod_container_status_restarts_total{namespace="default",pod=~"(booking|payment|user)-.*"}[10m]) > 2
+          expr: increase(kube_pod_container_status_restarts_total{namespace="default",pod=~"(booking|payment|user|driver|notification|redis|postgres)-.*"}[10m]) > 2
           labels:
             severity: warning
           annotations:
             summary: "Pod {{ $labels.pod }} restart {{ $value | humanize }} lần trong 10 phút"
+        # Production Simulation (Incident 6) - OOMKilled báo NGAY lần đầu (khác PodRestarting: >2 lần/10 phút).
+        # last_terminated_reason chỉ giữ lý do của lần chết GẦN NHẤT -> ghép với restarts tăng để không báo mãi chuyện cũ
+        - alert: GrabMiniOOMKilled
+          expr: |
+            max by (pod, container) (kube_pod_container_status_last_terminated_reason{namespace="default",reason="OOMKilled"})
+            and on (pod, container)
+            increase(kube_pod_container_status_restarts_total{namespace="default"}[10m]) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.container }} ({{ $labels.pod }}) bị OOMKilled - vượt memory limit"
         - alert: GrabMiniTargetDown
           expr: up{job=~"(booking|payment|user|driver|notification)-service"} == 0
           for: 1m
