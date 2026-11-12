@@ -7,6 +7,7 @@ probes:
   enabled: true            # Phase 22 - bật probe (trước đây user không có)
 env:
   REDIS_URL: redis://redis:6379   # Final Project - cache (Redis chết -> /users vẫn chạy, views = null)
+  LEAK_KB_PER_REQUEST: "64"   # Incident 6 - release LỖI: memory leak
 resources:                 # Final Project - mọi service đều có requests/limits (scheduler + chống memory leak lan ra node)
   requests:
     cpu: 50m
