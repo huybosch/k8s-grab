@@ -2,7 +2,7 @@
 
 Nhật ký lab: mỗi **Scenario** = lệnh đã chạy thật + code liên quan + kết quả đã verify + bài học, theo đúng thứ tự làm. Giáo trình (học gì, vì sao) nằm ở [../Roadmap.md](../Roadmap.md).
 
-> **⚠️ Git (`github.com/huybosch/k8s-grab`, nhánh `main`) là nguồn sự thật của namespace `default`** - Argo CD sync `charts/` + `helm-values/` vào cluster (Phase 24). **Deploy app = `./ci/pipeline.ps1 -Service <svc>`** (commit tag + `git push`); sửa hạ tầng = sửa file + `git push`. Các lệnh `kubectl apply -f k8s/...` (Scenario 0-20), `helm upgrade`/`helm rollback` (Scenario 22-23) là **lịch sử** - chạy lại sẽ bị Argo CD selfHeal đè lại (hoặc tạo field lạ mà Argo CD không quản lý). Muốn dựng lại môi trường: dùng [[#🔁 Dựng lại toàn bộ cluster từ đầu|🔁 Dựng lại toàn bộ cluster]].
+> **⚠️ Git (`github.com/huybosch/k8s-grab`, nhánh `main`) là nguồn sự thật của namespace `default`** - Argo CD sync `charts/` + `helm-values/` vào cluster (Phase 24). **Deploy app = `./ci/pipeline.ps1 -Service <svc>`** (commit tag + `git push`); sửa hạ tầng = sửa file + `git push`. Các lệnh `kubectl apply -f k8s/...` (Scenario 0-20), `helm upgrade`/`helm rollback` (Scenario 22-23) là **lịch sử** - chạy lại sẽ bị Argo CD selfHeal đè lại (hoặc tạo field lạ mà Argo CD không quản lý). Muốn dựng lại môi trường: dùng [🔁 Dựng lại toàn bộ cluster](#rebuild).
 
 ## 📊 Trạng thái hiện tại (11/11/2026)
 
@@ -21,37 +21,37 @@ Nhật ký lab: mỗi **Scenario** = lệnh đã chạy thật + code liên quan
 
 ## 📋 Menu
 
-- [[#Scenario 0 - Tạo cluster (Phase 0 / Lab 0)|Scenario 0 - Tạo cluster (Phase 0 / Lab 0)]]
-- [[#Scenario 1 - Scaffold + build + load 5 service image (Phase 2 / Lab 2)|Scenario 1 - Scaffold + build + load 5 service image (Phase 2 / Lab 2)]]
-- [[#Scenario 2 - Deploy + Service + scale test (Phase 3 / Lab 3)|Scenario 2 - Deploy + Service + scale test (Phase 3 / Lab 3)]]
-- [[#Scenario 3 - Service discovery booking → payment (Phase 4 / Lab 4)|Scenario 3 - Service discovery booking → payment (Phase 4 / Lab 4)]]
-- [[#Scenario 4 - ConfigMap + Secret (Phase 5)|Scenario 4 - ConfigMap + Secret (Phase 5)]]
-- [[#Scenario 5 - Probes + fake failure test (Phase 6 / Lab 5)|Scenario 5 - Probes + fake failure test (Phase 6 / Lab 5)]]
-- [[#Scenario 6 - Rolling update v1 → v2, zero-downtime (Phase 7 / Lab 6)|Scenario 6 - Rolling update v1 → v2, zero-downtime (Phase 7 / Lab 6)]]
-- [[#Scenario 7 - Rollback khi deploy lỗi (Phase 8)|Scenario 7 - Rollback khi deploy lỗi (Phase 8)]]
-- [[#Scenario 8 - Pod Replacement vs Container Restart (Phase 9)|Scenario 8 - Pod Replacement vs Container Restart (Phase 9)]]
-- [[#Scenario 9 - Resource requests/limits + stress test (Phase 10)|Scenario 9 - Resource requests/limits + stress test (Phase 10)]]
-- [[#Scenario 10 - HorizontalPodAutoscaler (Phase 11)|Scenario 10 - HorizontalPodAutoscaler (Phase 11)]]
-- [[#Scenario 11 - Graceful Shutdown (Phase 12)|Scenario 11 - Graceful Shutdown (Phase 12)]]
-- [[#Scenario 12 - Ingress + Ingress Controller (Phase 13)|Scenario 12 - Ingress + Ingress Controller (Phase 13)]]
-- [[#Scenario 13 - PostgreSQL + Persistent Storage (Phase 14)|Scenario 13 - PostgreSQL + Persistent Storage (Phase 14)]]
-- [[#Scenario 14 - Deployment → StatefulSet (Phase 15)|Scenario 14 - Deployment → StatefulSet (Phase 15)]]
-- [[#Scenario 15 - Job + CronJob (Phase 16)|Scenario 15 - Job + CronJob (Phase 16)]]
-- [[#Scenario 16 - Multi-node + Node Failure (Phase 17)|Scenario 16 - Multi-node + Node Failure (Phase 17)]]
-- [[#Scenario 17 - topologySpreadConstraints: spread Pod đều qua node (Phase 18)|Scenario 17 - topologySpreadConstraints: spread Pod đều qua node (Phase 18)]]
-- [[#Scenario 18 - High Availability: PodAntiAffinity + PDB + failover nhanh (Phase 19)|Scenario 18 - High Availability: PodAntiAffinity + PDB + failover nhanh (Phase 19)]]
-- [[#Scenario 19 - NetworkPolicy: zero-trust trong namespace (Phase 20)|Scenario 19 - NetworkPolicy: zero-trust trong namespace (Phase 20)]]
-- [[#Scenario 20 - Observability: Prometheus + Grafana + app metrics (Phase 21)|Scenario 20 - Observability: Prometheus + Grafana + app metrics (Phase 21)]]
-- [[#Scenario 21 - Logs (Loki + Alloy) + Alert (PrometheusRule + Alertmanager) (Phase 21)|Scenario 21 - Logs (Loki + Alloy) + Alert (PrometheusRule + Alertmanager) (Phase 21)]]
-- [[#Scenario 22 - Helm: chart dùng chung + chuyển resource đang chạy sang Helm (Phase 22)|Scenario 22 - Helm: chart dùng chung + chuyển resource đang chạy sang Helm (Phase 22)]]
-- [[#Scenario 23 - CI/CD: pipeline local + local registry + tag theo git SHA (Phase 23)|Scenario 23 - CI/CD: pipeline local + local registry + tag theo git SHA (Phase 23)]]
-- [[#Scenario 24 - GitOps: Argo CD + app-of-apps, deploy = git push (Phase 24)|Scenario 24 - GitOps: Argo CD + app-of-apps, deploy = git push (Phase 24)]]
-- [[#Scenario 25 - Final Project: ráp đủ Grab Mini Platform (5 service + Redis + PostgreSQL)|Scenario 25 - Final Project: ráp đủ Grab Mini Platform (5 service + Redis + PostgreSQL)]]
-- [[#Scenario 26 - Production Simulation: Incident 1-7 (gây sự cố thật, đo, xử lý, vá)|Scenario 26 - Production Simulation: Incident 1-7 (gây sự cố thật, đo, xử lý, vá)]]
-- [[#Cleanup - xoá image Docker cũ không dùng|Cleanup - xoá image Docker cũ không dùng]]
-- [[#🔁 Dựng lại toàn bộ cluster từ đầu|🔁 Dựng lại toàn bộ cluster từ đầu]]
-- [[#🧠 Tổng hợp bài học|🧠 Tổng hợp bài học]]
-- [[#Việc còn thiếu|Việc còn thiếu]]
+- [Scenario 0 - Tạo cluster (Phase 0 / Lab 0)](#scenario-0)
+- [Scenario 1 - Scaffold + build + load 5 service image (Phase 2 / Lab 2)](#scenario-1)
+- [Scenario 2 - Deploy + Service + scale test (Phase 3 / Lab 3)](#scenario-2)
+- [Scenario 3 - Service discovery booking → payment (Phase 4 / Lab 4)](#scenario-3)
+- [Scenario 4 - ConfigMap + Secret (Phase 5)](#scenario-4)
+- [Scenario 5 - Probes + fake failure test (Phase 6 / Lab 5)](#scenario-5)
+- [Scenario 6 - Rolling update v1 → v2, zero-downtime (Phase 7 / Lab 6)](#scenario-6)
+- [Scenario 7 - Rollback khi deploy lỗi (Phase 8)](#scenario-7)
+- [Scenario 8 - Pod Replacement vs Container Restart (Phase 9)](#scenario-8)
+- [Scenario 9 - Resource requests/limits + stress test (Phase 10)](#scenario-9)
+- [Scenario 10 - HorizontalPodAutoscaler (Phase 11)](#scenario-10)
+- [Scenario 11 - Graceful Shutdown (Phase 12)](#scenario-11)
+- [Scenario 12 - Ingress + Ingress Controller (Phase 13)](#scenario-12)
+- [Scenario 13 - PostgreSQL + Persistent Storage (Phase 14)](#scenario-13)
+- [Scenario 14 - Deployment → StatefulSet (Phase 15)](#scenario-14)
+- [Scenario 15 - Job + CronJob (Phase 16)](#scenario-15)
+- [Scenario 16 - Multi-node + Node Failure (Phase 17)](#scenario-16)
+- [Scenario 17 - topologySpreadConstraints: spread Pod đều qua node (Phase 18)](#scenario-17)
+- [Scenario 18 - High Availability: PodAntiAffinity + PDB + failover nhanh (Phase 19)](#scenario-18)
+- [Scenario 19 - NetworkPolicy: zero-trust trong namespace (Phase 20)](#scenario-19)
+- [Scenario 20 - Observability: Prometheus + Grafana + app metrics (Phase 21)](#scenario-20)
+- [Scenario 21 - Logs (Loki + Alloy) + Alert (PrometheusRule + Alertmanager) (Phase 21)](#scenario-21)
+- [Scenario 22 - Helm: chart dùng chung + chuyển resource đang chạy sang Helm (Phase 22)](#scenario-22)
+- [Scenario 23 - CI/CD: pipeline local + local registry + tag theo git SHA (Phase 23)](#scenario-23)
+- [Scenario 24 - GitOps: Argo CD + app-of-apps, deploy = git push (Phase 24)](#scenario-24)
+- [Scenario 25 - Final Project: ráp đủ Grab Mini Platform (5 service + Redis + PostgreSQL)](#scenario-25)
+- [Scenario 26 - Production Simulation: Incident 1-7 (gây sự cố thật, đo, xử lý, vá)](#scenario-26)
+- [Cleanup - xoá image Docker cũ không dùng](#cleanup)
+- [🔁 Dựng lại toàn bộ cluster từ đầu](#rebuild)
+- [🧠 Tổng hợp bài học](#bai-hoc)
+- [Việc còn thiếu](#con-thieu)
 
 ---
 
@@ -1603,7 +1603,7 @@ spec:
 >
 > **Bài học quan trọng #4 - traffic từ node không bị chặn**: probe của kubelet và metrics-server (scrape kubelet trên node) đều xuất phát từ host network của node, phần lớn CNI (bao gồm kindnet) cho phép mặc định → default-deny không làm Pod restart. Nhưng workload chạy **trong Pod** ở namespace khác (Prometheus ở Phase 21, Argo CD...) SẼ bị chặn - phải thêm policy allow từ namespace đó.
 >
-> **Khi tạo lại cluster**: xem [[#🔁 Dựng lại toàn bộ cluster từ đầu|🔁 Dựng lại toàn bộ cluster]].
+> **Khi tạo lại cluster**: xem [🔁 Dựng lại toàn bộ cluster](#rebuild).
 
 ---
 
@@ -1863,7 +1863,7 @@ Các query PromQL chính trong dashboard:
 >
 > **Bài học quan trọng #4 - kube-prometheus-stack trên kind**: chart mặc định giả định control-plane expose metrics ra ngoài - trên `kind` (và nhiều managed cluster như EKS/GKE, nơi control-plane bị ẩn hoàn toàn) phải tắt các ServiceMonitor đó, nếu không sẽ có alert `TargetDown` giả. Và `serviceMonitorSelectorNilUsesHelmValues: false` là bắt buộc nếu muốn Prometheus nhận ServiceMonitor tự viết không mang label `release: monitoring`.
 >
-> **Khi tạo lại cluster**: xem [[#🔁 Dựng lại toàn bộ cluster từ đầu|🔁 Dựng lại toàn bộ cluster]].
+> **Khi tạo lại cluster**: xem [🔁 Dựng lại toàn bộ cluster](#rebuild).
 
 ---
 
