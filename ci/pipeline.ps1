@@ -36,7 +36,7 @@ function Invoke-Stage([string]$Name, [scriptblock]$Body) {
 # Đợi Argo CD: app đã sync ĐÚNG commit $Revision, Synced + Healthy, và Deployment rollout xong.
 # Không có webhook GitHub -> cluster nên "refresh" chủ động thay vì đợi chu kỳ poll (60s).
 function Wait-ArgoSync([string]$App, [string]$Revision) {
-  $deadline = (Get-Date).AddSeconds($TimeoutSec); $last = ""; $refreshed = $false
+  $deadline = (Get-Date).AddSeconds($TimeoutSec); $last = ""; $refreshed = $false; $degradedSince = $null
   while ((Get-Date) -lt $deadline) {
     # service MỚI: Application chưa có cho tới khi root sync ApplicationSet (commit này thêm element) -> refresh root, đợi
     $json = kubectl -n argocd get application $App --ignore-not-found -o json
@@ -49,7 +49,13 @@ function Wait-ArgoSync([string]$App, [string]$Revision) {
     $s = ($json | ConvertFrom-Json).status
     $now = "sync={0}@{1} health={2} op={3}" -f $s.sync.status, "$($s.sync.revision)".Substring(0, [Math]::Min(7, "$($s.sync.revision)".Length)), $s.health.status, $s.operationState.phase
     if ($now -ne $last) { Write-Host "    argocd $App : $now"; $last = $now }
-    if ($s.health.status -eq "Degraded") { throw "Argo CD báo $App Degraded" }
+    # Degraded THOÁNG QUA là bình thường với app có HPA: ngay sau rollout HPA chưa có metric của Pod mới
+    # (ScalingActive=False/FailedGetResourceMetric) -> Argo CD coi HPA Degraded ~30s (gặp ở Incident 4).
+    # Chỉ coi là lỗi khi Degraded LIÊN TỤC > 30s, nếu không pipeline sẽ git revert oan.
+    if ($s.health.status -eq "Degraded") {
+      if (-not $degradedSince) { $degradedSince = Get-Date }
+      elseif (((Get-Date) - $degradedSince).TotalSeconds -gt 30) { throw "Argo CD báo $App Degraded liên tục > 30s" }
+    } else { $degradedSince = $null }
     # sync.revision = commit Argo CD đang so sánh; Synced ở revision đó = cluster khớp Git của commit đó.
     # (không đòi operationState.revision: commit không đổi manifest của app này thì Argo CD không chạy sync nào)
     if ($s.sync.revision -eq $Revision -and $s.sync.status -eq "Synced" -and $s.health.status -eq "Healthy" -and
