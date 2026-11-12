@@ -9,7 +9,7 @@ resources:
 autoscaling:
   enabled: true
   minReplicas: 3          # Incident 1: 2 Pod -> mất 1 = mất 50% công suất; 3 Pod -> mất 33%
-  maxReplicas: 10
+  maxReplicas: 20          # Incident 3: 10x traffic -> chạm 10 Pod mà CPU vẫn 70-83% (> 50%) - không còn dư địa
   targetCPUUtilizationPercentage: 50
 pdb:
   minAvailable: 2

@@ -1,6 +1,8 @@
-// Production Simulation - tải song song (Node 18+, không cần thư viện): node ci/load.js <url> <concurrency> <seconds> [method]
+// Production Simulation - tải song song (Node 18+, không cần thư viện):
+//   node ci/load.js <url> <concurrency> <seconds> [method] [pauseMs]
+// pauseMs = nghỉ giữa 2 request của MỖI luồng (giới hạn tốc độ). Không có -> chạy hết sức (2 luồng đã ~225 req/s!).
 // In mỗi giây: số request OK / lỗi / p95 (ms); cuối cùng in tổng + mẫu lỗi.
-const [url, conc = "20", secs = "30", method = "POST"] = process.argv.slice(2);
+const [url, conc = "20", secs = "30", method = "POST", pauseMs = "0"] = process.argv.slice(2);
 const end = Date.now() + Number(secs) * 1000;
 const t0 = Date.now();
 let ok = 0, fail = 0, sec = { ok: 0, fail: 0, lat: [] };
@@ -25,6 +27,7 @@ async function worker() {
       errors.set(k, (errors.get(k) || 0) + 1);
     }
     sec.lat.push(Date.now() - s);
+    if (Number(pauseMs) > 0) await new Promise((r) => setTimeout(r, Number(pauseMs)));
   }
 }
 Promise.all(Array.from({ length: Number(conc) }, worker)).then(() => {

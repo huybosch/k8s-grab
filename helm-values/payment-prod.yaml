@@ -1,0 +1,9 @@
+# Override riêng cho payment ở PROD - Incident 3: traffic 10x -> payment (cố định 3 Pod) chạy ~113% CPU request
+# -> thêm HPA. Chart bỏ spec.replicas khi autoscaling.enabled.
+# ⚠️ Bật lần đầu trên Deployment đang chạy: PHẢI chuyển quyền sở hữu spec.replicas trước khi push
+#   (không thì server-side apply xoá field -> replicas về 1 -> mất 2/3 Pod), xem COMMANDS.md Incident 3.
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 50
