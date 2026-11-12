@@ -1,3 +1,4 @@
+// Phase 23 (bổ sung): push file này lên main -> cd.yaml chạy trên self-hosted runner -> pipeline deploy driver
 const express = require("express");
 const metrics = require("./metrics");
 const app = express();
