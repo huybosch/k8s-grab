@@ -82,8 +82,11 @@ app.post("/booking", async (req, res) => {
   }
 });
 
-app.get("/slow", (req, res) => {
-  setTimeout(() => res.send("done after 10s"), 10000);
+// Phase 12 + Incident 5: request chậm giả lập (mặc định 10s, ?ms=15000 -> 15s, tối đa 60s)
+// /booking/slow: đi qua được Ingress (prefix /booking) + NetworkPolicy (chỉ ingress-nginx vào được booking)
+app.get(["/slow", "/booking/slow"], (req, res) => {
+  const ms = Math.min(Number(req.query.ms) || 10000, 60000);
+  setTimeout(() => res.send(`done after ${ms / 1000}s by ${process.env.HOSTNAME}`), ms);
 });
 
 // Phase 23: chỉ listen khi chạy trực tiếp (node server.js); khi test thì require("./server") lấy app

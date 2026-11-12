@@ -112,3 +112,11 @@ test("GET /metrics có counter http_requests_total theo route + status", async (
   assert.match(text, /http_requests_total\{method="POST",route="\/booking",status="503"\} 1/);
   assert.doesNotMatch(text, /route="\/health"/, "/health không được tính vào metrics");
 });
+
+test("GET /booking/slow?ms=50 trả sau ~50ms (Incident 5)", async () => {
+  const t0 = Date.now();
+  const r = await fetch(`${base}/booking/slow?ms=50`);
+  assert.equal(r.status, 200);
+  assert.match(await r.text(), /^done after 0.05s/);
+  assert.ok(Date.now() - t0 >= 45);
+});

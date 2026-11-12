@@ -26,11 +26,17 @@ function createRedis(url) {
 }
 app.set("redis", process.env.REDIS_URL && require.main === module ? createRedis(process.env.REDIS_URL) : null);
 
+// Incident 6 - FAULT INJECTION cho lab (giống BUGGY của booking): giả lập memory leak kiểu "cache không giới hạn".
+// > 0 -> mỗi request /users giữ lại N KB, không bao giờ giải phóng. Mặc định 0 = tắt.
+const LEAK_KB = Number(process.env.LEAK_KB_PER_REQUEST || 0);
+const leaked = [];
+
 const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`timeout ${ms}ms`)), ms))]);
 
 app.get("/health", (req, res) => res.status(200).send("ok"));
 
 app.get("/users", async (req, res) => {
+  if (LEAK_KB > 0) leaked.push(Buffer.alloc(LEAK_KB * 1024, 1)); // fill = chạm vào từng trang nhớ -> tính vào RSS thật
   let views = null;
   const redis = app.get("redis");
   if (redis) {
