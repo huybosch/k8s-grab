@@ -4,7 +4,8 @@ image:
   repository: booking-service
 containerPort: 3003
 env:
-  VERSION: v1
+  VERSION: v2
+  BUGGY: "true"   # Incident 2 - release v2 LỖI
 # Final Project: booking KHÔNG truy cập DB (chỉ payment ghi DB) -> bỏ envFrom booking-config + booking-secret
 #   (least privilege: Pod booking bị chiếm cũng không có password DB; NetworkPolicy cũng không cho vào postgres)
 probes:
