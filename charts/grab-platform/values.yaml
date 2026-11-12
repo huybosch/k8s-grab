@@ -54,6 +54,9 @@ networkPolicies:
     - { to: notification, from: [booking, driver], port: 3005 }
     - { to: postgres, from: [payment, db-init], port: 5432 }   # booking KHÔNG còn vào DB (không dùng)
     - { to: redis, from: [user], port: 6379 }
+  # Incident 7: chiều EGRESS cho mọi app trong appPorts, sinh từ danh sách allow ở trên (+ DNS)
+  egress:
+    enabled: true
 
 settlement:
   enabled: true

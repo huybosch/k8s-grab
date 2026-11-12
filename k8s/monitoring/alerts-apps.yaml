@@ -52,6 +52,29 @@ spec:
             severity: warning
           annotations:
             summary: "{{ $labels.container }} ({{ $labels.pod }}) bị OOMKilled - vượt memory limit"
+        # Incident 6 - báo TRƯỚC khi OOMKilled. working set = thứ cgroup dùng để quyết định OOM kill.
+        - alert: GrabMiniMemoryNearLimit
+          expr: |
+            max by (pod, container) (container_memory_working_set_bytes{namespace="default",container!=""})
+            / on (pod, container)
+            max by (pod, container) (kube_pod_container_resource_limits{namespace="default",resource="memory"}) > 0.85
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.container }} ({{ $labels.pod }}) dùng {{ $value | humanizePercentage }} memory limit"
+        # Theo XU HƯỚNG 5 phút: sẽ chạm limit trong 10 phút tới -> nghi leak (bắt được cả leak chậm, lúc còn xa limit).
+        # for: 1m lọc nhiễu lúc Pod mới khởi động (memory 0 -> mức nền, vượt ngưỡng 10-20s). Backtest Incident 6: báo trước OOM 28s.
+        - alert: GrabMiniMemoryLeakSuspected
+          expr: |
+            predict_linear((max by (pod, container) (container_memory_working_set_bytes{namespace="default",container!=""}))[5m:15s], 600)
+            / on (pod, container)
+            max by (pod, container) (kube_pod_container_resource_limits{namespace="default",resource="memory"}) > 1
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.container }} ({{ $labels.pod }}) dự kiến chạm memory limit trong 10 phút (nghi memory leak)"
         - alert: GrabMiniTargetDown
           expr: up{job=~"(booking|payment|user|driver|notification)-service"} == 0
           for: 1m

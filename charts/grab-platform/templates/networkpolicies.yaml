@@ -95,4 +95,45 @@ spec:
         - protocol: TCP
           port: {{ .port }}
 {{- end }}
+{{- if $np.egress.enabled }}
+{{- range $app := keys $np.appPorts | sortAlpha }}
+---
+# Incident 7 - EGRESS: Pod {{ $app }} bị chiếm quyền cũng chỉ đi được tới DNS + đúng các đích trong "allow"
+# (không Internet, không Kubernetes API, không namespace khác). Sinh từ CÙNG danh sách allow với chiều ingress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-{{ $app }}
+  labels:
+    {{- include "grab-platform.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ $app }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    {{- range $np.allow }}
+    {{- if has $app .from }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app: {{ .to }}
+      ports:
+        - protocol: TCP
+          port: {{ .port }}    # port CONTAINER (sau DNAT của Service), không phải port 80 của Service
+    {{- end }}
+    {{- end }}
+{{- end }}
+{{- end }}
 {{- end }}
