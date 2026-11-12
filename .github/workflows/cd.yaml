@@ -1,0 +1,78 @@
+# Phase 23 (bổ sung) - CD qua SELF-HOSTED runner trên máy chạy cluster kind
+#
+#   push main (đổi *-service/**) ──► runner trên máy local ──► ci/pipeline.ps1 -Service <svc đổi>
+#                                                               test -> build -> push localhost:5001
+#                                                               -> commit helm-values/<svc>-image.yaml + git push
+#                                                               -> đợi Argo CD sync -> smoke (lỗi: git revert)
+#
+# Vì sao self-hosted: runner của GitHub (cloud) không vào được kind + registry localhost:5001 trên máy cá nhân.
+# ci.yaml (runner GitHub) vẫn chạy test/build cho cả PR; file này CHỈ deploy.
+#
+# Chặn PR từ fork (repo public) - 3 lớp:
+#   1. file này không có trigger pull_request / pull_request_target
+#   2. job chỉ chạy khi event push/workflow_dispatch trên main của đúng repo (điều kiện `if` bên dưới)
+#   3. C:\actions-runner\guard.ps1 (ci/runner-guard.ps1) trên runner: từ chối MỌI job khác - kể cả workflow
+#      mà PR tự thêm vào với runs-on: self-hosted (lớp 1-2 không chặn được trường hợp này)
+#   + Settings -> Actions -> General -> "Require approval for all external contributors"
+#
+# Commit deploy do pipeline push bằng GITHUB_TOKEN -> GitHub KHÔNG kích hoạt workflow mới -> không lặp vô hạn.
+name: cd
+
+on:
+  push:
+    branches: [main]
+    paths: ["*-service/**"]
+  workflow_dispatch:
+    inputs:
+      services:
+        description: "Service cần deploy, cách nhau dấu phẩy (vd. booking,user)"
+        required: true
+        default: booking
+
+permissions:
+  contents: write   # pipeline commit helm-values/<svc>-image.yaml + git push (và git revert khi lỗi)
+
+concurrency:
+  group: cd-main
+  cancel-in-progress: false   # KHÔNG huỷ deploy đang chạy giữa chừng (có thể đang chờ revert)
+
+jobs:
+  deploy:
+    if: github.repository == 'huybosch/k8s-grab' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: [self-hosted, grab-mini]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # pipeline cần lịch sử: tag = SHA commit cuối của <svc>-service, kiểm tra tụt sau origin
+
+      - name: chọn service
+        id: pick
+        shell: pwsh
+        env:
+          INPUT_SERVICES: ${{ inputs.services }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          $all = "booking", "payment", "user", "driver", "notification"
+          if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch") {
+            $svc = $env:INPUT_SERVICES -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+          } else {
+            # không dùng action bên thứ 3 (dorny/paths-filter) trên runner có quyền vào cluster -> tự diff
+            $base = $env:BEFORE
+            if (-not $base -or $base -match '^0+$') { $base = "HEAD~1" }
+            $files = git diff --name-only $base HEAD
+            $svc = $all | Where-Object { $s = $_; $files | Where-Object { $_ -like "$s-service/*" } }
+          }
+          $bad = $svc | Where-Object { $all -notcontains $_ }
+          if ($bad) { throw "service không hợp lệ: $($bad -join ',')" }
+          "services=$($svc -join ',')" >> $env:GITHUB_OUTPUT
+          Write-Host "deploy: $($svc -join ', ')"
+
+      - name: pipeline
+        if: steps.pick.outputs.services != ''
+        shell: pwsh
+        env:
+          SERVICES: ${{ steps.pick.outputs.services }}
+        run: |
+          # checkout ở trạng thái detached HEAD tại commit vừa push; pipeline push HEAD:main
+          ./ci/pipeline.ps1 -Service ($env:SERVICES -split ",")
