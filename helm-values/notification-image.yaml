@@ -1,4 +1,4 @@
 # TẠO BỞI ci/pipeline.ps1 - KHÔNG sửa tay. Image đang chạy ở prod cho notification (Argo CD đọc file này).
 image:
   repository: localhost:5001/notification-service
-  tag: "0424fa18d0b7"
+  tag: "54c2ee3fa934"
