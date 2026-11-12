@@ -1,4 +1,4 @@
-# Grab Mini - Command Reference (Phase 0 → Phase 24 + Final Project)
+# Grab Mini - Command Reference (Phase 0 → Phase 24 + Final Project + Production Simulation)
 
 Nhật ký lab: mỗi **Scenario** = lệnh đã chạy thật + code liên quan + kết quả đã verify + bài học, theo đúng thứ tự làm. Giáo trình (học gì, vì sao) nằm ở [../Roadmap.md](../Roadmap.md).
 
@@ -12,12 +12,12 @@ Nhật ký lab: mỗi **Scenario** = lệnh đã chạy thật + code liên quan
 | Code | `grab-mini/` = repo `github.com/huybosch/k8s-grab` (public, nhánh `main`); mỗi lần deploy = 1 commit `deploy(<svc>): <sha>`, rollback = commit `Revert ...` | `git` + GitHub Actions `ci.yaml` (test + build + chạy thử container) |
 | GitOps | Argo CD 3.6.1 (namespace `argocd`): `root` → AppProject `grab-mini`, ApplicationSet `grab-services` (booking/payment/user), `grab-platform`; poll Git 60s, selfHeal | Helm: `argocd` (`k8s/argocd/values.yaml`) + `kubectl apply -f argocd/root.yaml` (1 lần) |
 | Registry | `registry:2.8.3` container `kind-registry`, `localhost:5001` (trong cluster: `http://kind-registry:5000`) | `ci/setup-local-registry.ps1` |
-| App | `booking` (HPA 2-10), `payment` x3, `user` x3, `driver` x3, `notification` x2 - image `localhost:5001/<svc>-service:<git-sha>` (tag đang chạy: `helm-values/<svc>-image.yaml`); probe, PDB, topologySpread (`matchLabelKeys`), preStop 10s, requests/limits, failover 30s | `ci/pipeline.ps1` → Git → Argo CD: ApplicationSet `grab-services` (chart `grab-service`) |
-| Platform | ConfigMap `booking-config`, Ingress `/users` `/booking` `/payment` `/payments` `/drivers`, 7 NetworkPolicy (default-deny + luồng theo sơ đồ), CronJob `settlement-job`, StatefulSet `postgres` (bảng `payments`, role `payment`), Job `db-init` (PostSync), Deployment `redis` | Git → Argo CD: `grab-platform` (không prune) |
+| App | `booking` (HPA 3-20), `payment` (HPA 3-10), `user` x3, `driver` x3, `notification` x2 - image `localhost:5001/<svc>-service:<git-sha>` (tag đang chạy: `helm-values/<svc>-image.yaml`); probe, PDB, topologySpread (`matchLabelKeys`), preStop 10s, keepAliveTimeout 65s, requests/limits, không mount ServiceAccount token, failover 30s | `ci/pipeline.ps1` → Git → Argo CD: ApplicationSet `grab-services` (chart `grab-service`) |
+| Platform | ConfigMap `booking-config`, Ingress `/users` `/booking` `/payment` `/payments` `/drivers`, 12 NetworkPolicy (default-deny + 4 luồng ingress + 5 `egress-<app>`), Ingress retry (`proxy-connect-timeout 1s`, `next-upstream`), CronJob `settlement-job`, StatefulSet `postgres` (bảng `payments`, role `payment`), Job `db-init` (PostSync), Deployment `redis` (toleration 30s) | Git → Argo CD: `grab-platform` (không prune) |
 | Secret | `payment-db` (user DB `payment`, password ngẫu nhiên), `booking-secret` (không còn service nào dùng) | `kubectl create secret` (cố ý ngoài Git) |
 | Hạ tầng | `ingress-nginx` (+ patch nodeSelector), `metrics-server` (+ patch insecure-tls) | `kubectl apply` từ URL upstream |
 | Monitoring | `kube-prometheus-stack` 93.1.1, Loki 7.5.0, Alloy 1.15.0 (namespace `monitoring`) | Helm: `monitoring`, `loki`, `alloy` |
-| Monitoring config | ServiceMonitor, PrometheusRule (5 alert, 5 service), `alert-webhook`, dashboard Grafana | `kubectl apply -f k8s/monitoring/` |
+| Monitoring config | ServiceMonitor, PrometheusRule (8 alert: error rate, p95, no pods, restarting, OOMKilled, memory near limit, memory leak, target down), `alert-webhook`, dashboard Grafana | `kubectl apply -f k8s/monitoring/` |
 
 ## 📋 Menu
 
@@ -47,6 +47,7 @@ Nhật ký lab: mỗi **Scenario** = lệnh đã chạy thật + code liên quan
 - [[#Scenario 23 - CI/CD: pipeline local + local registry + tag theo git SHA (Phase 23)|Scenario 23 - CI/CD: pipeline local + local registry + tag theo git SHA (Phase 23)]]
 - [[#Scenario 24 - GitOps: Argo CD + app-of-apps, deploy = git push (Phase 24)|Scenario 24 - GitOps: Argo CD + app-of-apps, deploy = git push (Phase 24)]]
 - [[#Scenario 25 - Final Project: ráp đủ Grab Mini Platform (5 service + Redis + PostgreSQL)|Scenario 25 - Final Project: ráp đủ Grab Mini Platform (5 service + Redis + PostgreSQL)]]
+- [[#Scenario 26 - Production Simulation: Incident 1-7 (gây sự cố thật, đo, xử lý, vá)|Scenario 26 - Production Simulation: Incident 1-7 (gây sự cố thật, đo, xử lý, vá)]]
 - [[#Cleanup - xoá image Docker cũ không dùng|Cleanup - xoá image Docker cũ không dùng]]
 - [[#🔁 Dựng lại toàn bộ cluster từ đầu|🔁 Dựng lại toàn bộ cluster từ đầu]]
 - [[#🧠 Tổng hợp bài học|🧠 Tổng hợp bài học]]
@@ -2567,6 +2568,131 @@ kubectl rollout restart deploy booking payment user driver notification   # rest
 
 ---
 
+<a id="scenario-26"></a>
+## Scenario 26 - Production Simulation: Incident 1-7 (gây sự cố thật, đo, xử lý, vá)
+
+Mỗi incident: gây sự cố trên cluster thật **trong lúc có traffic** → đo ảnh hưởng tới người dùng → xử lý → tìm nguyên nhân gốc → vá (qua Git/Argo CD) → đo lại. Công cụ mới trong `ci/`:
+
+| File | Dùng để |
+|---|---|
+| `ci/traffic.ps1` | traffic tuần tự qua Ingress (5 endpoint), in ok/fail/slow theo endpoint + **thời điểm từng lỗi** |
+| `ci/load.js` | tải song song: `node ci/load.js <url> <luồng> <giây> [method] [pauseMs]`, in ok/fail/p95 mỗi giây; `LOAD_TIMEOUT_MS` cho request dài |
+| `ci/slow-burst.js` | bắn N request chậm cùng lúc, in **Pod nào** trả lời (Incident 5) |
+| `ci/rollback.ps1` | rollback GitOps 1 lệnh: `git revert` commit gần nhất đổi `helm-values/<svc>*` + push + refresh Argo CD + đợi |
+| `ci/attack-surface.ps1` | "kẻ tấn công có shell trong Pod": thử mọi đường mạng + credential, in OPEN/BLOCKED |
+
+### Tổng hợp
+
+| # | Incident | Ảnh hưởng đo được | Giải pháp đã áp dụng (verify lại) |
+|---|---|---|---|
+| 1 | 1 Pod booking chết (`kill -9`) | 0/754, **7**/~6000, 0/13 313 lỗi - chỉ request **đang xử lý dở** trên Pod chết; container restart tại chỗ sau 17-20s; mất 50% công suất (2 Pod) | booking HPA `min 3` + PDB `minAvailable 2`; alert restart/NoPods phủ đủ 5 service + redis/postgres |
+| 2 | Release v2 lỗi (config) | **686/1320** booking lỗi; alert sau 132s; tổng 5 phút (rollback chờ Argo CD poll 67s) | `ci/rollback.ps1`: Synced sau **12s** |
+| 3 | Traffic 10x (16 → 160 req/s) | **0/31 055** lỗi, p95 12 → 17-33ms; HPA 3 → 10 trong 73s nhưng **chạm trần** (CPU 70-83% > 50%); payment ~113% CPU request | booking `maxReplicas 20`; payment HPA 3-10 (chuyển quyền `replicas` trước - không mất Pod nào) |
+| 4 | Node chạy payment chết | trước vá: 8 lỗi tuần tự + 14/12 030 (timeout 5s), Redis mất > 5 phút | nginx `proxy-connect-timeout 1s` + `next-upstream` → **3** lỗi + 8/12 336; Redis `tolerationSeconds 30` → lên lại sau **86s** |
+| 5 | Deploy lúc request dài 15s | **30/30 OK**, 16 request được Pod **đã bị xoá** trả lời trọn vẹn; request 35s (> grace) → Pod bị kill, nginx gửi lại GET (67s, chạy 2 lần) | đã đúng sẵn: `grace 30 ≥ preStop 10 + 15 + dư` - ghi quy tắc |
+| 6 | Memory leak | 18 → 226 MiB trong 77s, **cả 3 Pod OOMKilled cùng lúc** → `/users` sập ~8s (~670 lỗi); alert sau OOM 50s | rollback 25s; alert mới `MemoryNearLimit` + `MemoryLeakSuspected` (`predict_linear` - backtest: báo **trước** OOM 28s) |
+| 7 | user-service bị chiếm, tìm đường vào DB | DB/service khác **đã chặn** từ trước; nhưng **Internet, Kubernetes API (có token), Argo CD, Grafana: OPEN** | NetworkPolicy **egress** cho 5 app (sinh từ cùng `allow` list) + `automountServiceAccountToken: false` → chỉ còn Redis + DNS |
+
+Phát hiện thêm trong lúc chạy: **race keep-alive** nginx ↔ Node (1 lần 502 / 3h) → `keepAliveTimeout 65s`; pipeline **revert oan** khi HPA `Degraded` thoáng qua → chỉ fail khi Degraded > 30s; HPA **scale lên 19 Pod** khi nâng `maxReplicas` ngay sau spike.
+
+```powershell
+cd D:\OBsidian\NUO3HC\Kubernetes\grab-mini
+./ci/traffic.ps1 -Seconds 15          # baseline: 510/510 OK
+
+# ---------- Incident 1: Pod chết (crash thật: kill -9 process từ node, như Scenario 8) ----------
+$job = Start-Job { node D:\OBsidian\NUO3HC\Kubernetes\grab-mini\ci\load.js http://127.0.0.1/booking 20 30 POST }
+$pod = kubectl get pods -l app=booking -o jsonpath='{.items[0].metadata.name}'; $node = kubectl get pod $pod -o jsonpath='{.spec.nodeName}'
+$cid = (docker exec $node crictl ps --label "io.kubernetes.pod.name=$pod" --name booking -q).Trim()
+docker exec $node kill -9 (docker exec $node crictl inspect --output go-template --template '{{.info.pid}}' $cid).Trim()
+kubectl get pod $pod -o jsonpath='{.status.containerStatuses[0].lastState.terminated}'   # exitCode 137
+kubectl logs -n ingress-nginx deploy/ingress-nginx-controller --since=1m | Select-String "Connection refused"   # nginx thử Pod khác
+
+# ---------- Incident 2: release lỗi -> phát hiện -> rollback ----------
+#   helm-values/booking.yaml: VERSION: v2 + BUGGY: "true" -> git commit + push (không qua pipeline)
+kubectl logs -n monitoring deploy/alert-webhook | Select-String HighErrorRate   # FIRING sau ~2 phút
+./ci/rollback.ps1 -Service booking                                              # git revert + push + refresh + đợi
+
+# ---------- Incident 3: 1x (1 luồng, nghỉ 40ms ~16 req/s) -> 10x (10 luồng) ----------
+node ci/load.js http://127.0.0.1/booking 1 300 POST 40      # terminal 1 (nền)
+node ci/load.js http://127.0.0.1/booking 9 180 POST 40      # terminal 2, sau 60s
+kubectl get hpa -w; kubectl top pods -l 'app in (booking,payment,postgres)'
+# bật HPA cho Deployment ĐANG chạy: chuyển quyền spec.replicas sang manager khác TRƯỚC khi push chart bỏ replicas
+'{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"payment","namespace":"default"},"spec":{"replicas":3}}' | kubectl apply --server-side --field-manager=handover-to-hpa -f -
+git push    # helm-values/payment-prod.yaml (autoscaling) -> spec.replicas không bao giờ < 3
+
+# ---------- Incident 4: node chết ----------
+docker stop grab-mini-worker2      # traffic.ps1 + load.js /payment chạy nền
+kubectl get node grab-mini-worker2 -w
+docker start grab-mini-worker2
+kubectl rollout restart deploy booking payment user driver notification   # rải lại Pod (node về KHÔNG tự cân bằng)
+
+# ---------- Incident 5: deploy khi có request 15s ----------
+node ci/slow-burst.js 15000 30     # rồi NGAY: kubectl rollout restart deploy/booking
+node ci/slow-burst.js 35000 30     # đối chứng: request dài hơn grace period
+
+# ---------- Incident 6: memory leak ----------
+#   helm-values/user.yaml: LEAK_KB_PER_REQUEST: "64" -> push; tải /users
+kubectl top pods -l app=user; kubectl describe pod <user-pod> | Select-String "Last State|Reason|Exit Code"
+#   PromQL chẩn đoán: nodejs_heap_size_used_bytes vs nodejs_external_memory_bytes vs process_resident_memory_bytes
+./ci/rollback.ps1 -Service user
+
+# ---------- Incident 7: Pod bị chiếm ----------
+./ci/attack-surface.ps1 -App user
+./ci/attack-surface.ps1 -App payment
+```
+
+**📄 Code liên quan:**
+
+- `helm-values/booking-prod.yaml` - `minReplicas: 3`, `maxReplicas: 20`, PDB `minAvailable: 2`. `helm-values/payment-prod.yaml` (mới) - HPA 3-10, 50% CPU.
+- `k8s/monitoring/alerts-apps.yaml` - regex 5 service (+ redis, postgres cho restart); mới: `GrabMiniOOMKilled` (báo ngay lần đầu: `last_terminated_reason=OOMKilled` **and** restarts tăng trong 10 phút - không báo mãi chuyện cũ), `GrabMiniMemoryNearLimit` (working set / limit > 85%, `for: 1m`), `GrabMiniMemoryLeakSuspected`:
+
+  ```yaml
+  expr: |
+    predict_linear((max by (pod, container) (container_memory_working_set_bytes{namespace="default",container!=""}))[5m:15s], 600)
+    / on (pod, container)
+    max by (pod, container) (kube_pod_container_resource_limits{namespace="default",resource="memory"}) > 1
+  for: 1m     # lọc nhiễu lúc Pod mới khởi động (0 -> mức nền, vượt ngưỡng 10-20s)
+  ```
+
+- `charts/grab-platform/values.yaml` + `templates/ingress.yaml` - `ingress.annotations`: `proxy-connect-timeout: "1"`, `proxy-next-upstream: "error timeout"`, `proxy-next-upstream-tries: "3"`. `templates/redis.yaml` - toleration `not-ready`/`unreachable` 30s.
+- `charts/grab-platform/templates/networkpolicies.yaml` - `networkPolicies.egress.enabled`: mỗi app trong `appPorts` 1 policy `egress-<app>` = DNS (kube-dns 53 UDP/TCP) + mọi `allow` có app đó trong `from` (port **container**, vì policy so sau DNAT của Service). Kết quả: booking → payment:3004, notification:3005; driver → notification:3005; payment → postgres:5432; user → redis:6379; notification → (không gì).
+- `charts/grab-service` - `automountServiceAccountToken: false` (mặc định). `<svc>-service/server.js` (5 service) - `server.keepAliveTimeout = 65000; server.headersTimeout = 66000`.
+- `booking-service/server.js` - `/booking/slow?ms=` (qua được Ingress + NetworkPolicy). `user-service/server.js` - fault injection `LEAK_KB_PER_REQUEST` (mặc định 0, giống `BUGGY` của booking).
+- `ci/pipeline.ps1` - `Wait-ArgoSync`: Degraded chỉ là lỗi khi liên tục > 30s.
+
+**✅ Kết quả thật đã verify (12/11/2026):**
+
+- **Incident 1**: `kill -9` → `exitCode 137`, `BackOff` 10s, Ready lại sau 17-20s (cùng tên Pod). 3 lần đo: 0/754 (tuần tự), **7 lỗi** đúng giây bị kill (20 luồng), 0/13 313 (20 luồng). nginx: `connect() failed (111: Connection refused) while connecting to upstream` → thử upstream khác (request chưa gửi → retry được cả POST). Throughput 1 giây sau kill giảm ~384 → ~220 req/s (1 Pod gánh hết). Phụ: 2 lần load test 20 luồng đẩy HPA booking 2 → 4 → 8 → 10 Pod trong 30s; cluster đã bị restart qua đêm (Docker Desktop) - mọi Pod `restartCount=1`, metrics-server chưa sẵn sàng → HPA báo `unable to fetch metrics`.
+- **Incident 2** (timeline từ lúc push): 87s request 500 đầu tiên (Argo CD poll) → 100s rollout xong, **20/20 = 500** (readiness vẫn pass vì `/health` ok) → **232s** webhook `FIRING GrabMiniHighErrorRate ... error rate 100%` → 235s `git revert` + push → 302s request 200 đầu tiên (lại đợi poll) → 314s Synced → 416s `RESOLVED`. Traffic: `/booking` **686 lỗi / 1320**, `/users` 0. Lần 2 với `rollback.ps1`: release lỗi lên trong 9s (có refresh), rollback **Synced sau 12s**, 26/30 = 200 ngay sau đó (4 request còn vào Pod v2 đang `preStop` 10s).
+- **Incident 3**: lần đầu định nghĩa sai "1x" = 2 luồng không nghỉ = ~225 req/s → HPA 3 → 10 ngay, 74 166/74 166 OK. Đo lại đúng: 1x ~16 req/s (4847 req/300s), 10x thêm ~145 req/s (26 208 req/180s): **0 lỗi**, p95 1x 12ms, 10x 17-33ms. HPA: tải tăng lúc 60s → `New size: 6` sau ~40s → `10` sau ~73s → `ScalingLimited: desired more than maximum` (CPU 70-83%); payment 3 Pod ~170m (request 3×50m); postgres ~60m. Scale-down: hết tải → đợi đúng 5 phút → 10 → 4 → 3. Bật HPA payment: chuyển quyền `replicas` (`handover-to-hpa`) → push → `min spec.replicas seen = 3`, traffic 1512/1512 OK. Bất ngờ: push `maxReplicas 20` → HPA booking `New size: 19; reason: All metrics below target` (dùng khuyến nghị cao nhất trong 5 phút - lúc spike cần ~19 nhưng bị trần 10).
+- **Incident 4** (worker2: payment ×2-3, redis, alertmanager, alert-webhook, kube-state-metrics, loki, argocd-server): `Ready=Unknown` sau 47-51s, evict sau 75-79s (+30s toleration), payment 3 Pod Ready ở node còn lại sau 88s. Trước vá: 8 lỗi (7 timeout 5s, tất cả trong ~50s trước `Unknown`) + 14/12 030 trên luồng `/payment`; `/booking` **0** (retry + idempotency key của Scenario 25); Redis không lên lại trong 180s. Sau vá (cùng kịch bản): `/users`, `/drivers`, `/payment`, `accept` **0 lỗi** (chỉ chậm > 1s), `/booking` 3×503 (cả 2 lần booking gọi payment đều trúng Pod chết), luồng `/payment` 8/12 336 (`504` ×7 = cả 3 lần thử đều trúng Pod chết), Redis Ready sau **86s**, views tiếp tục đếm. Node về: Ready sau 3s nhưng **mọi Pod app dồn sang worker** (không tự cân bằng) → `rollout restart` rải lại; `kube-state-metrics` CrashLoop 4 lần (`dial tcp 10.96.0.1:443: connection refused` - kube-proxy của node vừa bật chưa có rule) rồi tự hồi.
+- **Incident 5**: 30 luồng × request 15s, `rollout restart` giữa chừng: **210/210 OK**. Burst 30 request 15s cùng lúc + rollout sau 2s: **30/30 OK**, xong sau 15.06s, **16 request do Pod đã bị xoá trả lời trọn vẹn**. Đối chứng 35s: 30/30 "OK" nhưng **67s** - nginx log: `10.244.1.61:3003, 10.244.2.67:3003 ... 32.042, 35.002  502, 200` (Pod cũ bị SIGKILL lúc grace hết → 502 → nginx gửi lại GET sang Pod mới, chạy lại 35s). 6 lần `upstream prematurely closed connection`.
+- **Incident 6**: memory 18 → 43 → 90 → 149 → 197/226 MiB (0-77s), 92s: **3/3 Pod `OOMKilled/137`** cùng lúc; tải `/users`: 7 giây liền `ok=0 fail=124-132` (~670 lỗi). Webhook `FIRING GrabMiniOOMKilled` sau 138s. Prometheus 5 phút: `nodejs_heap_size_used_bytes` **19 MiB**, `nodejs_external_memory_bytes` **205 MiB**, `process_resident_memory_bytes` 287 MiB → leak nằm ở Buffer (ngoài heap JS). `describe`: `Last State: Terminated, Reason: OOMKilled, Exit Code: 137, Limits memory: 256Mi`. Rollback 25s → 30 MiB ổn định dưới tải. Backtest `predict_linear` trên dữ liệu thật: vượt ngưỡng liên tục từ 21:43:30, OOMKilled 21:44:58 → với `for: 1m` báo lúc 21:44:30 (**trước 28s**); nhiễu lúc Pod khởi động chỉ 10-20s. Tỉ lệ working set/limit đỉnh 10 phút = 90% (mẫu 15s).
+- **Incident 7** (từ trong Pod user, trước vá): BLOCKED `postgres:5432`, `payment-service`, `notification-service`, `booking-service`; OPEN `redis:6379`, **`10.96.0.1:443`**, **`1.1.1.1:443`**, **`argocd-server.argocd:80`**, **`monitoring-grafana.monitoring:80`**; env không có credential; **token có mount**, gọi `GET /api/v1/namespaces/default/secrets` → `403 Forbidden` (RBAC chặn). Push egress (traffic 90s: 3184/3185 - lỗi duy nhất là race keep-alive, không liên quan) → 5 policy `egress-*`; deploy 5 service (keepalive + automount): nginx 5 phút `200=7231`, **0 lỗi 5xx**. Sau vá: user chỉ OPEN `redis:6379` + DNS, token **không** mount; payment chỉ OPEN `postgres:5432` + DNS (có `DB_USERNAME/DB_PASSWORD` - cần cho việc của nó). Cuối: 36/36 target `up`, chỉ `Watchdog`, 7 app `Synced Healthy`, traffic 710/710.
+- Race keep-alive: nginx `"POST /booking" ... 10.244.1.19:3003 0 0.000 502` + `upstream prematurely closed connection while reading response header`; 1 lần trong 3 giờ log. Node `keepAliveTimeout=5000`, nginx upstream `keepalive_timeout 60s`.
+
+> **Bài học quan trọng #1 - replica không cứu được lỗi chung**: Pod chết lẻ (Incident 1) → các Pod khác gánh, gần như không ai thấy. Nhưng lỗi nằm trong **code/config** (Incident 2, 6) có mặt ở **mọi** replica: leak làm 3/3 Pod OOMKilled **cùng giây**, bug v2 làm 100% request lỗi. Chống lỗi chung = rollback nhanh + giới hạn phạm vi (canary), không phải thêm replica.
+>
+> **Bài học quan trọng #2 - `/health` và readiness không bắt được lỗi logic**: v2 trả 500 cho mọi booking nhưng Argo CD báo `Healthy`, rollout "thành công". Phải có tín hiệu nghiệp vụ: smoke test sau sync (pipeline có, nhưng đổi config đi thẳng Git thì không qua pipeline) và alert theo error rate - alert tới sau ~2 phút (`rate[1m]` + `for: 1m` + `group_wait`).
+>
+> **Bài học quan trọng #3 - MTTR = phát hiện + quyết định + thực thi; GitOps thêm độ trễ poll**: rollback bằng `git revert` mà không refresh Argo CD = đợi thêm tới 60s. `ci/rollback.ps1` đưa phần thực thi về 12s. `preStop` làm Pod lỗi phục vụ thêm 10s cả khi rollback.
+>
+> **Bài học quan trọng #4 - HPA có trần, có độ trễ, và có trí nhớ**: phản ứng sau ~40s (metrics-server 15s + chu kỳ HPA 15s + scale ×2 mỗi 15s), scale-down đợi 5 phút. Chạm `maxReplicas` = hết đường mà không có lỗi nào báo (chỉ `ScalingLimited`). Nâng trần ngay sau spike → HPA áp dụng khuyến nghị cũ (19 Pod). Thứ không có HPA (payment) và stateful (Postgres 1 Pod) là nút cổ chai tiếp theo. Định nghĩa "1x" sai (2 luồng không nghỉ = 225 req/s) cho kết luận sai.
+>
+> **Bài học quan trọng #5 - bật HPA cho Deployment đang chạy dưới server-side apply**: bỏ `spec.replicas` khỏi manifest mà không ai khác sở hữu field đó → API server xoá field → replicas về **1**. Chuyển quyền trước (`kubectl apply --server-side --field-manager=handover-to-hpa` chỉ field replicas) rồi mới push.
+>
+> **Bài học quan trọng #6 - node chết: ~50s "vùng mù" trước khi Kubernetes biết**: endpoint vẫn trỏ Pod chết tới khi node `Unknown` (~47-51s). Phía gọi phải tự bảo vệ: connect-timeout ngắn + thử đích khác (nginx: an toàn cả POST vì request chưa gửi), client retry có idempotency key. Pod hạ tầng (Redis) không có `tolerationSeconds` = đợi 300s mặc định. Node quay về không tự cân bằng Pod. Một node chứa cả Alertmanager + webhook = mất node là **mất luôn kênh báo động**.
+>
+> **Bài học quan trọng #7 - grace period là hợp đồng với request dài nhất**: `terminationGracePeriodSeconds ≥ preStop + request dài nhất + dư` (10 + 15 + 5 = 30). Vượt → SIGKILL giữa chừng; nginx gửi lại GET (người dùng chờ gấp đôi, server làm 2 lần) nhưng **không** gửi lại POST (502). Việc dài hơn vài chục giây nên đưa ra hàng đợi/job, không giữ trong request HTTP.
+>
+> **Bài học quan trọng #8 - memory: limit cứu node, metric đúng mới cứu service**: limit 256Mi khiến leak chỉ giết container (node không sao). Heap JS 19 MiB nhưng RSS 287 MiB - nhìn heap sẽ kết luận sai. Alert OOMKilled tới **sau** sự cố; báo trước cần ngưỡng so với limit + xu hướng (`predict_linear`), và backtest trên dữ liệu thật để chọn `for:` lọc nhiễu khởi động.
+>
+> **Bài học quan trọng #9 - "chặn được DB" chưa phải là an toàn**: NetworkPolicy chiều ingress bảo vệ đích, nhưng Pod bị chiếm vẫn ra được Internet (tải tool, gửi dữ liệu), Kubernetes API (với token được mount sẵn), và namespace không có policy (Argo CD - điều khiển cả cluster). Egress default-deny + không mount token + RBAC tối thiểu + credential DB tối thiểu = nhiều lớp; mỗi lớp kiểm chứng bằng phép thử thật từ trong Pod.
+>
+> **Bài học quan trọng #10 - keep-alive: server phải giữ kết nối lâu hơn proxy**: Node đóng kết nối rảnh sau 5s, nginx tái dùng tới 60s → hiếm nhưng chắc chắn có 502 (POST không retry). `keepAliveTimeout` của server > của proxy (65s > 60s), `headersTimeout` > `keepAliveTimeout`.
+
+---
+
 <a id="cleanup"></a>
 ## Cleanup - xoá image Docker cũ không dùng
 
@@ -2711,6 +2837,22 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 | `/health` không kiểm tra DB - DB chết mà liveness fail = restart toàn bộ Pod vô ích | [25](#scenario-25) |
 | Least privilege DB 3 lớp: NetworkPolicy, Secret riêng từng service, quyền SQL tối thiểu (`SELECT, INSERT`); superuser chỉ cho Job `db-init` | [25](#scenario-25) |
 
+**Xử lý sự cố (Production Simulation)**
+
+| Bài học | Scenario |
+|---|---|
+| Pod chết lẻ: chỉ mất request đang xử lý dở (0-7 / 13k); lỗi code/config có ở MỌI replica (leak: 3/3 OOMKilled cùng giây) → chống bằng rollback nhanh/canary, không phải thêm replica | [26](#scenario-26) |
+| `/health` + readiness không bắt lỗi logic (v2 trả 500, Argo CD vẫn Healthy) → smoke test sau sync + alert error rate (~2 phút) | [26](#scenario-26) |
+| Rollback GitOps không refresh = đợi poll 60s; `ci/rollback.ps1` (revert + push + refresh) → 12s | [26](#scenario-26) |
+| HPA: phản ứng ~40s, chạm `maxReplicas` không báo lỗi; nâng trần ngay sau spike → scale lên theo khuyến nghị cũ (19 Pod) | [26](#scenario-26) |
+| Bật HPA cho Deployment đang chạy (SSA): chuyển quyền `spec.replicas` sang field manager khác trước, nếu không replicas về 1 | [26](#scenario-26) |
+| Node chết: ~50s endpoint vẫn trỏ Pod chết → nginx `proxy-connect-timeout 1s` + `next-upstream` (an toàn cả POST), client retry + idempotency key; node về không tự cân bằng | [26](#scenario-26) |
+| `terminationGracePeriodSeconds ≥ preStop + request dài nhất + dư`; vượt → SIGKILL, nginx gửi lại GET (chạy 2 lần), POST thành 502 | [26](#scenario-26) |
+| Memory leak: heap 19 MiB nhưng RSS 287 MiB (Buffer); alert OOMKilled tới sau sự cố → `predict_linear` + `for: 1m` (backtest: báo trước 28s) | [26](#scenario-26) |
+| Pod bị chiếm: ingress policy chặn DB nhưng vẫn ra Internet / K8s API (token mount) / namespace khác → egress policy + `automountServiceAccountToken: false` | [26](#scenario-26) |
+| Keep-alive: server phải giữ lâu hơn proxy (Node 5s < nginx 60s → 502 hiếm); `keepAliveTimeout 65s` | [26](#scenario-26) |
+| HPA `Degraded` thoáng qua sau rollout (chưa có metric Pod mới) → pipeline chỉ fail khi Degraded > 30s | [26](#scenario-26) |
+
 **Observability**
 
 | Bài học | Scenario |
@@ -2787,6 +2929,12 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 - `booking-secret` tạo tay → cân nhắc Sealed Secrets / External Secrets.
 - `ingress-nginx` và `metrics-server` cài từ URL `main` / `latest`, chưa pin version.
 - Postgres dùng `local-path` (1 node) - chưa có replication/backup. Redis 1 replica, không lưu đĩa (cache - chấp nhận mất).
+- **Khuyến nghị từ Production Simulation (chưa làm)**:
+  - Incident 2: progressive delivery (Argo Rollouts canary + AnalysisTemplate theo error rate → tự abort), hoặc PostSync smoke Job cho thay đổi config đi thẳng Git.
+  - Incident 4: Alertmanager + `alert-webhook` 2 replica trải 2 node (hiện cùng node với kube-state-metrics → mất node = mất kênh báo động); outlier detection (service mesh) để đóng ~50s vùng mù; descheduler cân bằng lại Pod khi node quay về.
+  - Incident 5: việc dài (> ~20s) đưa vào hàng đợi/job thay vì giữ request HTTP.
+  - Incident 6: cache có giới hạn (LRU/TTL); công cụ heap profiling trên prod.
+  - Incident 7: NetworkPolicy ingress cho namespace `argocd`, `monitoring`; Redis AUTH; runtime detection (Falco); audit log Postgres.
 - NetworkPolicy mới có chiều **ingress**, chưa có **egress**.
 
 **Observability**
@@ -2797,4 +2945,4 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 - Runbook [🔁 Dựng lại toàn bộ cluster](#rebuild) chưa chạy trọn vẹn 1 lần liên tục.
 
 **Roadmap**
-- Production Simulation (Incident 1-7), demo cuối khoá.
+- Demo cuối khoá + review toàn bộ; giai đoạn 2: đưa lên AWS EKS (Future Plan trong Roadmap).
