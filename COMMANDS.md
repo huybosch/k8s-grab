@@ -45,6 +45,7 @@ Nhật ký lab: mỗi **Scenario** = lệnh đã chạy thật + code liên quan
 - [Scenario 21 - Logs (Loki + Alloy) + Alert (PrometheusRule + Alertmanager) (Phase 21)](#scenario-21)
 - [Scenario 22 - Helm: chart dùng chung + chuyển resource đang chạy sang Helm (Phase 22)](#scenario-22)
 - [Scenario 23 - CI/CD: pipeline local + local registry + tag theo git SHA (Phase 23)](#scenario-23)
+  - [23b - CD qua self-hosted runner, chặn PR từ fork](#scenario-23b)
 - [Scenario 24 - GitOps: Argo CD + app-of-apps, deploy = git push (Phase 24)](#scenario-24)
 - [Scenario 25 - Final Project: ráp đủ Grab Mini Platform (5 service + Redis + PostgreSQL)](#scenario-25)
 - [Scenario 26 - Production Simulation: Incident 1-7 (gây sự cố thật, đo, xử lý, vá)](#scenario-26)
@@ -2239,7 +2240,7 @@ git commit ──► ci/pipeline.ps1 -Service <svc>
                  6 record  git commit "deploy(<svc>): <sha>"  (Git = nhật ký deploy, tiền đề GitOps Phase 24)
 ```
 
-Đã chọn chạy **local** (không đẩy code lên GitHub): runner của GitHub không vào được cluster `kind` trên máy cá nhân. Bản GitHub Actions tương đương nằm ở `.github/workflows/ci.yaml` (chưa chạy).
+Đã chọn chạy **local** (không đẩy code lên GitHub): runner của GitHub không vào được cluster `kind` trên máy cá nhân. Bản GitHub Actions tương đương nằm ở `.github/workflows/ci.yaml` (chạy từ Phase 24, chỉ test + build). **Bổ sung [23b](#scenario-23b): CD qua self-hosted runner** - `git push` là tự chạy `pipeline.ps1`.
 
 ```powershell
 cd D:\OBsidian\NUO3HC\Kubernetes\grab-mini
@@ -2331,6 +2332,96 @@ git revert --no-edit HEAD
 > **Bài học quan trọng #6 - Windows/PowerShell**: bật `$PSNativeCommandUseErrorActionPreference` thì mọi lệnh ngoài lỗi đều ném exception - kể cả lệnh "dọn dẹp" trong `catch` (vd. `git checkout` file chưa track) → phải tự kiểm tra trước khi gọi. Truyền mảng `-Service a,b` chỉ chạy được khi gọi script trong phiên PowerShell (`./ci/pipeline.ps1`), không qua `pwsh -File`. Git Bash tự đổi `/etc/...` thành `C:/Program Files/Git/etc/...` khi `docker exec` → `MSYS_NO_PATHCONV=1`. `"$node:"` trong chuỗi PowerShell là lỗi cú pháp (`:` = scope) → `"${node}:"`.
 >
 > **Bài học quan trọng #7 - `/tmp` của node kind là tmpfs**: `docker cp file node:/tmp/x` báo thành công nhưng bên trong container KHÔNG thấy file (docker cp ghi vào lớp filesystem bên dưới mount tmpfs). Copy vào thư mục không phải mount (vd. `/etc/containerd/`). Bài học phụ: lỗi bị file cũ còn sót che mất - kiểm thử script "idempotent" thì phải xoá trạng thái cũ trước khi chạy lại.
+
+<a id="scenario-23b"></a>
+### 23b - CD qua self-hosted runner (bổ sung 13/11/2026)
+
+Bản đầu của Phase 23 chạy `ci/pipeline.ps1` bằng tay. Bổ sung: **runner GitHub Actions cài ngay trên máy chạy kind** → `git push` code là tự deploy.
+
+```text
+git push (đổi *-service/**) ──► GitHub ──► job "deploy" (cd.yaml) ──► runner trên máy local (C:\actions-runner)
+                                                                       ├ guard.ps1 (hook trước job): đúng repo/workflow/ref/event?
+                                                                       └ ci/pipeline.ps1 -Service <svc đổi>
+                                                                           test → build → push localhost:5001 → commit tag + git push
+                                                                           → đợi Argo CD → smoke (lỗi: git revert)
+ci.yaml (runner GitHub, ubuntu): test + build cho cả PR, KHÔNG deploy
+```
+
+**Vì sao self-hosted:** runner của GitHub chạy trên cloud, không vào được kind / `localhost:5001`. Runner tự cài nằm cạnh cluster → dùng chung docker, kubeconfig, registry với `pipeline.ps1`.
+
+**Chặn PR từ fork (repo public = ai cũng mở PR được):**
+
+| Lớp | Ở đâu | Chặn gì |
+|---|---|---|
+| 1 | `cd.yaml`: không có trigger `pull_request` | PR không kích hoạt workflow CD |
+| 2 | `cd.yaml`: `if:` repository + ref `main` + event push/workflow_dispatch | chạy nhầm trigger/nhánh |
+| 3 | **`C:\actions-runner\guard.ps1`** (bản gốc `ci/runner-guard.ps1`), hook `ACTIONS_RUNNER_HOOK_JOB_STARTED` | **mọi** job không phải `cd.yaml@refs/heads/main` + push/dispatch - kể cả workflow PR **tự thêm** với `runs-on: self-hosted` |
+| 4 | Settings → Actions → General → *Require approval for all external contributors* | workflow của người ngoài phải được duyệt mới chạy |
+
+Lớp 1-2 không đủ: workflow của PR là **bản trong nhánh PR**, kẻ tấn công chỉ cần thêm file `.github/workflows/x.yaml` mới. Lớp 3 nằm trên máy runner, PR không sửa được.
+
+```powershell
+# Cài runner (1 lần) - KHÔNG chạy như Windows service: service chạy dưới NETWORK SERVICE, không có Docker Desktop/kubeconfig
+mkdir C:\actions-runner; cd C:\actions-runner
+# tải actions-runner-win-x64-2.338.2.zip + kiểm SHA256 (Settings -> Actions -> Runners -> New self-hosted runner), giải nén
+.\config.cmd --url https://github.com/huybosch/k8s-grab --token <TOKEN 1 giờ> --name grab-mini-local --labels grab-mini --work _work --unattended
+
+# Hook chặn job: lưu UTF-8 CÓ BOM (runner gọi bằng Windows PowerShell 5.1 - không BOM thì tiếng Việt lỗi font)
+$t = Get-Content -Raw -Encoding utf8 D:\OBsidian\NUO3HC\Kubernetes\grab-mini\ci\runner-guard.ps1
+[IO.File]::WriteAllText("C:\actions-runner\guard.ps1", $t, [Text.UTF8Encoding]::new($true))
+"ACTIONS_RUNNER_HOOK_JOB_STARTED=C:\actions-runner\guard.ps1" | Set-Content C:\actions-runner\.env
+
+# Chạy runner (dưới tài khoản Windows của bạn)
+Start-Process C:\actions-runner\run.cmd -WorkingDirectory C:\actions-runner -WindowStyle Minimized
+
+# (tuỳ chọn) tự chạy khi đăng nhập Windows
+$a = New-ScheduledTaskAction -Execute C:\actions-runner\run.cmd -WorkingDirectory C:\actions-runner
+Register-ScheduledTask -TaskName "GitHub Actions Runner (grab-mini)" -Action $a -Trigger (New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME")
+```
+
+Code liên quan - `.github/workflows/cd.yaml` (rút gọn):
+
+```yaml
+on:
+  push: { branches: [main], paths: ["*-service/**"] }
+  workflow_dispatch: { inputs: { services: { required: true, default: booking } } }
+permissions: { contents: write }                              # pipeline commit tag + git push / git revert
+concurrency: { group: cd-main, cancel-in-progress: false }    # không huỷ deploy giữa chừng
+jobs:
+  deploy:
+    if: github.repository == 'huybosch/k8s-grab' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: [self-hosted, grab-mini]
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }     # pipeline cần lịch sử: tag = SHA commit cuối của <svc>-service
+      - id: pick                     # tự git diff before..HEAD - KHÔNG dùng action bên thứ 3 trên máy có quyền vào cluster
+        run: ...                     # -> services=driver
+      - run: ./ci/pipeline.ps1 -Service ($env:SERVICES -split ",")
+```
+
+`ci/runner-guard.ps1` (lõi):
+
+```powershell
+$workflow = "huybosch/k8s-grab/.github/workflows/cd.yaml@refs/heads/main"
+if ($env:GITHUB_REPOSITORY -ne "huybosch/k8s-grab")                   { $why += "repo" }
+if (@("push","workflow_dispatch") -notcontains $env:GITHUB_EVENT_NAME) { $why += "event" }
+if ($env:GITHUB_REF -ne "refs/heads/main")                             { $why += "ref" }
+if ($env:GITHUB_WORKFLOW_REF -ne $workflow)                            { $why += "workflow" }
+if ($why.Count -gt 0) { exit 1 }   # runner huỷ job, không chạy bước nào
+```
+
+**Kết quả thực tế:**
+- Thử hook bằng env giả lập: push / dispatch `cd.yaml@main` → exit 0; workflow lạ từ `refs/pull/9/merge`, workflow lạ trên `main`, `cd.yaml` từ nhánh `feature` → exit 1.
+- Đăng ký runner `grab-mini-local` (label `grab-mini`), log `Listening for Jobs`.
+- **Deploy thật:** push `1778048` (sửa comment `driver-service/server.js`) → `cd` success, `ci` success. Runner tự commit `105a6f5 deploy(driver): 17780489fb4a`; cluster chạy `localhost:5001/driver-service:17780489fb4a`. Log Worker: `Pre Job Hook` chạy `guard.ps1` → exit 0 (ngữ cảnh GitHub thật khớp).
+- **Không lặp:** commit deploy `105a6f5` push bằng `GITHUB_TOKEN` → GitHub **không** tạo run mới.
+- **Chặn workflow lạ** (mô phỏng PR tự thêm workflow): nhánh `test-evil` có `evil.yaml` (`runs-on: [self-hosted, grab-mini]`, chạy `kubectl get nodes`) → job `failure` ở bước *Set up runner* (hook), bước `kubectl` **skipped**. Đã xoá nhánh.
+
+> **Bài học quan trọng #8 - self-hosted runner + repo public**: runner có quyền gì thì job chạy trên nó có quyền đó (ở đây: docker, kubeconfig, push Git). Điều kiện trong YAML không bảo vệ được vì PR mang **workflow của chính nó** → phải chặn ở **phía runner** (hook trước job; với organization: runner group chỉ cho workflow chỉ định) + bắt duyệt workflow người ngoài. GitHub khuyến cáo không dùng self-hosted runner cho repo public; lab này chấp nhận vì có hook + chỉ chạy trên `main`.
+>
+> **Bài học quan trọng #9 - commit bằng `GITHUB_TOKEN` không kích hoạt workflow**: pipeline commit tag rồi push lại `main` mà không lặp vô hạn - GitHub cố ý không tạo run mới cho push bằng `GITHUB_TOKEN`. Đổi sang PAT/deploy key thì phải tự chống lặp (vd. `paths-ignore: helm-values/*-image.yaml`).
+>
+> **Runner phải đang chạy**: tắt máy / tắt `run.cmd` → job `cd` nằm chờ (queued) tới khi runner quay lại (GitHub huỷ nếu chờ quá 24 giờ). Deploy tay `./ci/pipeline.ps1` vẫn dùng được như cũ.
 
 ---
 
