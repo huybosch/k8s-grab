@@ -2821,8 +2821,8 @@ Dùng khi cluster hỏng hẳn - điển hình: **Docker Desktop restart làm `g
 cd D:\OBsidian\NUO3HC\Kubernetes\grab-mini
 
 # --- 0. backup Postgres (xoá cluster = mất PVC). Image postgres không có role "root" -> phải -U postgres ---
-New-Item -ItemType Directory -Force "$env:USERPROFILEackups\grab-mini" | Out-Null   # KHÔNG để trong %TEMP% (Windows tự dọn)
-kubectl exec postgres-0 -- pg_dumpall -U postgres > "$env:USERPROFILEackups\grab-mini\pg-backup-$(Get-Date -Format yyyyMMdd).sql"
+New-Item -ItemType Directory -Force "$env:USERPROFILE\backups\grab-mini" | Out-Null   # KHÔNG để trong %TEMP% (Windows tự dọn)
+kubectl exec postgres-0 -- pg_dumpall -U postgres > "$env:USERPROFILE\backups\grab-mini\pg-backup-$(Get-Date -Format yyyyMMdd).sql"
 
 # --- 1. cluster 3 node (control-plane có port 80/443 + nhãn ingress-ready) ---
 kind delete cluster --name grab-mini
