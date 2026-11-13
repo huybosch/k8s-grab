@@ -67,7 +67,7 @@ switch ($Scene) {
     Title "3. Deploy = git push (self-hosted runner -> pipeline -> Argo CD)"
     Sync-Main
     $before = Get-Image booking; Say "đang chạy: $before"
-    Start-Traffic 150
+    Start-Traffic 90
     $f = "booking-service/server.js"
     $lines = Get-Content $f
     $stamp = "// demo deploy $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
