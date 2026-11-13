@@ -35,4 +35,4 @@ $total = 0; $fail = 0
 foreach ($e in $Endpoint) { $total += $stats[$e].ok + $stats[$e].fail; $fail += $stats[$e].fail }
 "TRAFFIC {0}s: ok={1} fail={2}" -f $Seconds, ($total - $fail), $fail
 foreach ($e in $Endpoint) { "  {0,-30} ok={1,-5} fail={2,-4} slow(>1s)={3}" -f $e, $stats[$e].ok, $stats[$e].fail, $stats[$e].slow }
-if ($errors.Count) { "  lỗi (thời điểm tính từ lúc bắt đầu):"; $errors | Select-Object -First 25 | ForEach-Object { "    $_" }; if ($errors.Count -gt 25) { "    ... +$($errors.Count - 25) lỗi nữa" } }
+if ($errors.Count) { "  lỗi (thời điểm tính từ lúc bắt đầu):"; $errors | Select-Object -First 25 | ForEach-Object { "    $_" }; if ($errors.Count -gt 25) { "    ... +$($errors.Count - 26) lỗi nữa ..."; "    $($errors[-1])   <- lỗi cuối" } }
