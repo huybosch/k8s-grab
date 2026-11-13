@@ -15,7 +15,7 @@
     {
       "id": 1,
       "type": "stat",
-      "title": "Tổng RPS (3 service)",
+      "title": "Tổng RPS (5 service)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
