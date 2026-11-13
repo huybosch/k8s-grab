@@ -2803,10 +2803,25 @@ Dùng khi cluster hỏng hẳn - điển hình: **Docker Desktop restart làm `g
 
 > Mất data: PVC của Postgres (local-path) nằm trong container node → **xoá cluster = mất data Postgres**.
 >
-> Runbook này gộp từ các bước đã verify riêng lẻ ở Scenario 12, 16, 20, 21, 22, 23 - **chưa chạy trọn vẹn 1 lần liên tục**; nếu bước nào lỗi, xem lại scenario tương ứng.
+> **Đã chạy trọn vẹn 1 lần liên tục ngày 13/11/2026** (xoá cluster thật, dựng lại từ đầu): **~11 phút, không bước nào lỗi, không sửa tay**.
+>
+> | Bước | Thời gian | Kết quả |
+> |---|---|---|
+> | 0 backup Postgres | vài giây | `pg_dumpall` 166.827 dòng (166.627 payment - data load test) |
+> | 1 cluster 3 node | 33s | 3 node v1.37.0 |
+> | 2 local registry | 10s | `hosts.toml` trên 3 node; catalog còn đủ 5 image (registry nằm ngoài cluster) |
+> | 3 ingress-nginx + metrics-server | 81s | controller v1.15.1, metrics-server v0.9.1 (nay đã pin trong runbook) |
+> | 4 monitoring + Loki + Alloy | 328s | kube-prometheus-stack 155s, Loki 62s, Alloy ~60s |
+> | 5 Secret + Argo CD + bootstrap | 106s + **72s** | 7 app Synced Healthy 72s sau `kubectl apply -f argocd/root.yaml`; booking/payment `Degraded` ~30s (HPA chưa có metric Pod mới - bình thường) |
+> | 6 verify | - | 4 release Helm, `db-init done`, 4 endpoint trả đúng (booking có `transactionId` + `notificationId`), **36/36 target up**, 12 NetworkPolicy, HPA 3-20 / 3-10, Pod trải 2 worker; `ci/attack-surface.ps1`: user chỉ tới được Redis + DNS (như sau Incident 7) |
+>
+> Lưu ý: ngay sau khi dựng, `CPUThrottlingHigh` (info) của `alert-webhook` pending + `InfoInhibitor` firing - CPU limit nhỏ lúc khởi động, tự hết. Không restore backup cũ: `pg_dumpall` chứa **cả role `payment` với password cũ** → restore sẽ đè password, lệch Secret `payment-db` mới (muốn giữ data: chỉ restore bảng, `pg_dump -t payments --data-only`).
 
 ```powershell
 cd D:\OBsidian\NUO3HC\Kubernetes\grab-mini
+
+# --- 0. backup Postgres (xoá cluster = mất PVC). Image postgres không có role "root" -> phải -U postgres ---
+kubectl exec postgres-0 -- pg_dumpall -U postgres > "$env:TEMP\pg-backup-$(Get-Date -Format yyyyMMdd).sql"
 
 # --- 1. cluster 3 node (control-plane có port 80/443 + nhãn ingress-ready) ---
 kind delete cluster --name grab-mini
@@ -2817,10 +2832,11 @@ kind create cluster --name grab-mini --config kind-multi-node.yaml
 ./ci/setup-local-registry.ps1
 
 # --- 3. ingress-nginx + metrics-server (patch bằng file - tránh lỗi escape JSON của PowerShell; CHỈ chạy 1 lần) ---
-kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
+#   PIN version (13/11/2026): trước đây dùng URL main/latest -> mỗi lần dựng có thể ra bản khác. 2 URL dưới = đúng bản đã chạy thật
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.15.1/deploy/static/provider/kind/deploy.yaml
 kubectl wait -n ingress-nginx --for=condition=ready pod -l app.kubernetes.io/component=controller --timeout=180s
 kubectl patch deployment ingress-nginx-controller -n ingress-nginx --type=json --patch-file k8s/patches/ingress-nginx-nodeselector.json
-kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.9.1/components.yaml
 kubectl patch deployment metrics-server -n kube-system --type=json --patch-file k8s/patches/metrics-server-insecure-tls.json
 kubectl rollout status deployment/ingress-nginx-controller -n ingress-nginx --timeout=120s
 kubectl rollout status deployment/metrics-server -n kube-system --timeout=120s
@@ -2855,6 +2871,10 @@ curl.exe -s -X POST http://localhost/booking -H "Content-Type: application/json"
 curl.exe -s http://localhost/payments/stats; curl.exe -s http://localhost/drivers
 $P = "/api/v1/namespaces/monitoring/services/monitoring-kube-prometheus-prometheus:9090/proxy"
 kubectl get --raw "$P/api/v1/targets?state=active" | jq -r '[.data.activeTargets[].health] | group_by(.) | map("\(.[0])=\(length)") | join(" ")'   # chỉ có "up"
+kubectl get netpol                                      # 12
+./ci/attack-surface.ps1                                 # từ Pod user: chỉ OPEN redis + DNS
+
+# --- 7. self-hosted runner (23b): KHÔNG cần làm gì - kind create ghi lại context kind-grab-mini (đã thử 13/11: push driver -> cd success 55s trên cluster mới) ---
 ```
 
 ---
@@ -3013,12 +3033,11 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 - `booking-secret` vẫn tạo tay (ngoài Git) → Argo CD không dựng lại được nếu thiếu; cần Sealed Secrets / External Secrets.
 - Chưa giảm `progressDeadlineSeconds` → Argo CD chỉ báo `Degraded` sau 10 phút.
 - Sửa file dùng chung (`env-prod.yaml`, chart `grab-service`) = rollout **mọi** service cùng lúc - chưa có cách tách đợt (sync-wave / từng app).
-- Runbook dựng lại cluster bằng Argo CD (bước 5) chưa chạy thử trên cluster mới.
 - Registry không có volume: xoá container `kind-registry` = mất mọi image (kể cả bản đang chạy). Registry còn image rác (`registry-test`, `booking-service:989561244027` của Demo C) - `registry:2` mặc định tắt API xoá.
 
 **Vận hành**
 - `booking-secret` tạo tay → cân nhắc Sealed Secrets / External Secrets.
-- `ingress-nginx` và `metrics-server` cài từ URL `main` / `latest`, chưa pin version.
+- `ingress-nginx` (v1.15.1) và `metrics-server` (v0.9.1) đã pin trong runbook, nhưng vẫn cài bằng `kubectl apply` tay - chưa quản lý bằng Argo CD.
 - Postgres dùng `local-path` (1 node) - chưa có replication/backup. Redis 1 replica, không lưu đĩa (cache - chấp nhận mất).
 - **Khuyến nghị từ Production Simulation (chưa làm)**:
   - Incident 2: progressive delivery (Argo Rollouts canary + AnalysisTemplate theo error rate → tự abort), hoặc PostSync smoke Job cho thay đổi config đi thẳng Git.
@@ -3033,7 +3052,6 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 
 **Helm**
 - `env-staging.yaml` chưa deploy thử; chưa đóng gói/publish chart (`helm package`, OCI registry); chưa dùng plugin `helm-diff`.
-- Runbook [🔁 Dựng lại toàn bộ cluster](#rebuild) chưa chạy trọn vẹn 1 lần liên tục.
 
 **Roadmap**
 - Demo cuối khoá + review toàn bộ; giai đoạn 2: đưa lên AWS EKS (Future Plan trong Roadmap).
