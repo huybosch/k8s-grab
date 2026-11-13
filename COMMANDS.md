@@ -2966,6 +2966,7 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 | Keep-alive: server phải giữ lâu hơn proxy (Node 5s < nginx 60s → 502 hiếm); `keepAliveTimeout 65s` | [26](#scenario-26) |
 | HPA `Degraded` thoáng qua sau rollout (chưa có metric Pod mới) → pipeline chỉ fail khi Degraded > 30s | [26](#scenario-26) |
 | Password superuser Postgres nằm trong `values.yaml` của repo **public** (13/11 mới phát hiện) → chuyển sang Secret `postgres-superuser` + `ALTER USER` đổi password (giá trị cũ còn trong lịch sử Git mãi mãi - chỉ xoá khỏi file là **không đủ**); `POSTGRES_PASSWORD` chỉ có tác dụng lúc initdb | [rebuild](#rebuild) |
+| Thiếu `NODE_ENV=production` → Express trả **nguyên stack trace** (đường dẫn, thư viện) cho request lỗi ra Internet; đặt 1 lần ở `env-prod.yaml` (Helm gộp map `env`), rollout 5 service 0/5300 lỗi | - |
 
 **Observability**
 
