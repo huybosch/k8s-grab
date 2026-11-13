@@ -74,5 +74,8 @@ jobs:
         env:
           SERVICES: ${{ steps.pick.outputs.services }}
         run: |
+          # commit deploy dùng email noreply của GitHub (repo public - không lộ email thật; runner mặc định lấy git config global của máy)
+          git config user.name "ngochuyvn"
+          git config user.email "191938402+huybosch@users.noreply.github.com"
           # checkout ở trạng thái detached HEAD tại commit vừa push; pipeline push HEAD:main
           ./ci/pipeline.ps1 -Service ($env:SERVICES -split ",")
