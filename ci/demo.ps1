@@ -20,7 +20,7 @@ Set-Location $root
 
 function Title([string]$t) { Write-Host "`n=== $t ===" -ForegroundColor Cyan }
 function Say([string]$t) { Write-Host "  $t" -ForegroundColor Yellow }
-function Elapsed($sw) { "{0:N0}s" -f $sw.Elapsed.TotalSeconds }
+function Elapsed($sw) { "{0:N1}s" -f $sw.Elapsed.TotalSeconds }
 
 function Start-Traffic([int]$Seconds) {
   $script:traffic = Start-Job -ArgumentList "$root\ci\traffic.ps1", $Seconds { param($p, $s) & $p -Seconds $s }
@@ -90,7 +90,7 @@ switch ($Scene) {
     Say "giả sử ai đó: kubectl scale deploy/user --replicas=1"
     kubectl scale deploy/user --replicas=1 | Out-Null
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    do { Start-Sleep -Milliseconds 300; $r = kubectl get deploy user -o jsonpath='{.spec.replicas}' } until ($r -eq "3" -or $sw.Elapsed.TotalSeconds -gt 60)
+    do { Start-Sleep -Milliseconds 100; $r = kubectl get deploy user -o jsonpath='{.spec.replicas}' } until ($r -eq "3" -or $sw.Elapsed.TotalSeconds -gt 60)
     Say "spec.replicas về 3 sau $(Elapsed $sw) - Git mới là nguồn sự thật"
     kubectl rollout status deploy/user --timeout=60s | Out-Null; kubectl get deploy user
   }

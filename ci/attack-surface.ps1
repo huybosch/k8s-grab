@@ -36,3 +36,4 @@ if ($hasToken) {
 }
 $sa = kubectl get pod $pod -o jsonpath='{.spec.serviceAccountName}'
 "  RBAC của SA '$sa': list secrets = $(kubectl auth can-i list secrets --as=system:serviceaccount:default:$sa), get pods = $(kubectl auth can-i get pods --as=system:serviceaccount:default:$sa)"
+$global:LASTEXITCODE = 0   # `kubectl auth can-i` trả exit 1 khi câu trả lời là "no" - đó là kết quả mong muốn, không phải lỗi
