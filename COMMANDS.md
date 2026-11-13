@@ -2374,7 +2374,7 @@ $t = Get-Content -Raw -Encoding utf8 D:\OBsidian\NUO3HC\Kubernetes\grab-mini\ci\
 # Chạy runner (dưới tài khoản Windows của bạn)
 Start-Process C:\actions-runner\run.cmd -WorkingDirectory C:\actions-runner -WindowStyle Minimized
 
-# (tuỳ chọn) tự chạy khi đăng nhập Windows
+# tự chạy khi đăng nhập Windows (đã đăng ký 14/11/2026)
 $a = New-ScheduledTaskAction -Execute C:\actions-runner\run.cmd -WorkingDirectory C:\actions-runner
 Register-ScheduledTask -TaskName "GitHub Actions Runner (grab-mini)" -Action $a -Trigger (New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME")
 ```
@@ -2821,7 +2821,8 @@ Dùng khi cluster hỏng hẳn - điển hình: **Docker Desktop restart làm `g
 cd D:\OBsidian\NUO3HC\Kubernetes\grab-mini
 
 # --- 0. backup Postgres (xoá cluster = mất PVC). Image postgres không có role "root" -> phải -U postgres ---
-kubectl exec postgres-0 -- pg_dumpall -U postgres > "$env:TEMP\pg-backup-$(Get-Date -Format yyyyMMdd).sql"
+New-Item -ItemType Directory -Force "$env:USERPROFILEackups\grab-mini" | Out-Null   # KHÔNG để trong %TEMP% (Windows tự dọn)
+kubectl exec postgres-0 -- pg_dumpall -U postgres > "$env:USERPROFILEackups\grab-mini\pg-backup-$(Get-Date -Format yyyyMMdd).sql"
 
 # --- 1. cluster 3 node (control-plane có port 80/443 + nhãn ingress-ready) ---
 kind delete cluster --name grab-mini
@@ -3030,13 +3031,13 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 - Image `<svc>-service:v1/v2/v3` (bản `kind load` cũ của Phase 2-21) vẫn còn trên node + Docker Desktop nhưng không còn dùng - prod chạy `localhost:5001/<svc>-service:<sha>`.
 
 **CI/CD + GitOps**
-- CD chạy qua **self-hosted runner** trên máy local ([23b](#scenario-23b)) - máy tắt = không deploy được; runner chưa tự khởi động khi đăng nhập. Chưa có registry chung mà cả runner GitHub lẫn cluster cùng dùng được.
+- CD chạy qua **self-hosted runner** trên máy local ([23b](#scenario-23b)) - máy tắt = không deploy được (runner tự chạy khi đăng nhập Windows - Task Scheduler). Chưa có registry chung mà cả runner GitHub lẫn cluster cùng dùng được.
 - Chưa scan lỗ hổng image (Trivy...); chưa có môi trường staging (deploy thẳng prod), chưa có approval / branch protection cho `main`.
 - Argo CD: chưa có webhook (poll 60s), chưa có notifications (Slack) khi sync lỗi, chưa đổi password admin / tắt user admin, chưa scrape metrics Argo CD vào Prometheus. Monitoring, ingress-nginx, metrics-server và chính Argo CD **chưa** được quản lý bằng Argo CD (vẫn Helm/kubectl tay).
 - `postgres-superuser`, `payment-db` tạo tay (ngoài Git) → Argo CD không dựng lại được nếu thiếu; cần Sealed Secrets / External Secrets.
 - Chưa giảm `progressDeadlineSeconds` → Argo CD chỉ báo `Degraded` sau 10 phút.
 - Sửa file dùng chung (`env-prod.yaml`, chart `grab-service`) = rollout **mọi** service cùng lúc - chưa có cách tách đợt (sync-wave / từng app).
-- Registry không có volume: xoá container `kind-registry` = mất mọi image (kể cả bản đang chạy). Registry còn image rác (`registry-test`, `booking-service:989561244027` của Demo C) - `registry:2` mặc định tắt API xoá.
+- Registry dùng volume có tên `kind-registry-data` (14/11 - trước đó là volume không tên, `docker volume prune` sẽ xoá sạch image); vẫn chỉ 1 bản trên 1 máy, chưa backup. Registry còn image rác (`registry-test`, `booking-service:989561244027` của Demo C) - `registry:2` mặc định tắt API xoá.
 
 **Vận hành**
 - `ingress-nginx` (v1.15.1) và `metrics-server` (v0.9.1) đã pin trong runbook, nhưng vẫn cài bằng `kubectl apply` tay - chưa quản lý bằng Argo CD.

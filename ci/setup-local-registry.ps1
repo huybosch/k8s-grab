@@ -14,7 +14,8 @@ $PSNativeCommandUseErrorActionPreference = $true
 
 # --- 1. registry ---
 if (-not (docker ps -a --filter "name=^$Name$" --format "{{.Names}}")) {
-  docker run -d --restart=always -p "127.0.0.1:${Port}:5000" --name $Name registry:2.8.3 | Out-Null
+  # volume CÓ TÊN (14/11): volume không tên bị "docker volume prune" xoá -> mất mọi image, kể cả bản đang chạy prod
+  docker run -d --restart=always -p "127.0.0.1:${Port}:5000" --name $Name -v "${Name}-data:/var/lib/registry" registry:2.8.3 | Out-Null
   Write-Host "registry $Name started"
 }
 $networks = docker inspect $Name --format "{{json .NetworkSettings.Networks}}" | ConvertFrom-Json
