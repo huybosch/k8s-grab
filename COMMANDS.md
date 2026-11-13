@@ -2,7 +2,7 @@
 
 Nhật ký lab: mỗi **Scenario** = lệnh đã chạy thật + code liên quan + kết quả đã verify + bài học, theo đúng thứ tự làm. Giáo trình (học gì, vì sao) nằm ở [../Roadmap.md](../Roadmap.md).
 
-> **⚠️ Git (`github.com/huybosch/k8s-grab`, nhánh `main`) là nguồn sự thật của namespace `default`** - Argo CD sync `charts/` + `helm-values/` vào cluster (Phase 24). **Deploy app = `./ci/pipeline.ps1 -Service <svc>`** (commit tag + `git push`); sửa hạ tầng = sửa file + `git push`. Các lệnh `kubectl apply -f k8s/...` (Scenario 0-20), `helm upgrade`/`helm rollback` (Scenario 22-23) là **lịch sử** - chạy lại sẽ bị Argo CD selfHeal đè lại (hoặc tạo field lạ mà Argo CD không quản lý). Muốn dựng lại môi trường: dùng [🔁 Dựng lại toàn bộ cluster](#rebuild).
+> **⚠️ Git (`github.com/huybosch/k8s-grab`, nhánh `main`) là nguồn sự thật của namespace `default`** - Argo CD sync `charts/` + `helm-values/` vào cluster (Phase 24). **Deploy app = `./ci/pipeline.ps1 -Service <svc>`** (commit tag + `git push`); sửa hạ tầng = sửa file + `git push`. Các lệnh `kubectl apply -f k8s/...` (Scenario 0-20), `helm upgrade`/`helm rollback` (Scenario 22-23) là **lịch sử** - chạy lại sẽ bị Argo CD selfHeal đè lại (hoặc tạo field lạ mà Argo CD không quản lý). Muốn dựng lại môi trường: dùng [🔁 Dựng lại toàn bộ cluster](#rebuild). Kịch bản demo cuối khoá: [DEMO.md](DEMO.md).
 
 ## 📊 Trạng thái hiện tại (11/11/2026)
 
