@@ -3007,7 +3007,7 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 - Image `<svc>-service:v1/v2/v3` (bản `kind load` cũ của Phase 2-21) vẫn còn trên node + Docker Desktop nhưng không còn dùng - prod chạy `localhost:5001/<svc>-service:<sha>`.
 
 **CI/CD + GitOps**
-- CD vẫn chạy trên **máy local** (build/push registry local + `git push`); GitHub Actions chỉ kiểm tra. Chưa có registry chung mà cả GitHub lẫn cluster cùng dùng được.
+- CD chạy qua **self-hosted runner** trên máy local ([23b](#scenario-23b)) - máy tắt = không deploy được; runner chưa tự khởi động khi đăng nhập. Chưa có registry chung mà cả runner GitHub lẫn cluster cùng dùng được.
 - Chưa scan lỗ hổng image (Trivy...); chưa có môi trường staging (deploy thẳng prod), chưa có approval / branch protection cho `main`.
 - Argo CD: chưa có webhook (poll 60s), chưa có notifications (Slack) khi sync lỗi, chưa đổi password admin / tắt user admin, chưa scrape metrics Argo CD vào Prometheus. Monitoring, ingress-nginx, metrics-server và chính Argo CD **chưa** được quản lý bằng Argo CD (vẫn Helm/kubectl tay).
 - `booking-secret` vẫn tạo tay (ngoài Git) → Argo CD không dựng lại được nếu thiếu; cần Sealed Secrets / External Secrets.
@@ -3026,7 +3026,7 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
   - Incident 5: việc dài (> ~20s) đưa vào hàng đợi/job thay vì giữ request HTTP.
   - Incident 6: cache có giới hạn (LRU/TTL); công cụ heap profiling trên prod.
   - Incident 7: NetworkPolicy ingress cho namespace `argocd`, `monitoring`; Redis AUTH; runtime detection (Falco); audit log Postgres.
-- NetworkPolicy mới có chiều **ingress**, chưa có **egress**.
+- Egress NetworkPolicy mới có cho 5 app trong `default` (Incident 7); Postgres/Redis và namespace khác chưa có.
 
 **Observability**
 - Chưa có tracing (OpenTelemetry), chưa scrape metrics của `ingress-nginx`, alert chưa gửi tới receiver thật (Slack/Telegram).
