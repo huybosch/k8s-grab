@@ -10,3 +10,7 @@ pdb:
 #   (Phase 12). Đo được: không có preStop -> 1/1770 request lỗi; 5s -> 5/4795 khi 5 service rollout cùng lúc
 #   (kube-proxy/ingress-nginx cập nhật trễ hơn 5s). 10s + booking retry payment có idempotency key.
 preStopSleepSeconds: 10
+# 13/11: không đặt NODE_ENV -> Express chạy chế độ dev, request lỗi (vd. JSON hỏng) trả NGUYÊN stack trace
+#   (đường dẫn /app/node_modules/..., phiên bản thư viện) ra Internet qua Ingress. production -> chỉ trả "Bad Request".
+env:
+  NODE_ENV: production
