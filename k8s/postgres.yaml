@@ -27,7 +27,7 @@ spec:
           image: postgres:16-alpine
           env:
             - name: POSTGRES_PASSWORD
-              value: "change-me"
+              value: "CHANGE_ME"
             - name: POSTGRES_DB
               value: "grabmini"
             # subdir avoids initdb "directory not empty" if the volume root has lost+found

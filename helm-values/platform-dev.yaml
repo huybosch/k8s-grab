@@ -5,5 +5,4 @@ ingress:
   host: dev.grab.local
 settlement:
   enabled: false           # dev không cần chạy settlement hằng đêm
-postgres:
-  password: dev-only
+# postgres: dùng Secret postgres-superuser trong namespace grab-dev (tạo tay, như prod)

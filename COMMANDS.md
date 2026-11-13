@@ -14,7 +14,7 @@ Nhật ký lab: mỗi **Scenario** = lệnh đã chạy thật + code liên quan
 | Registry | `registry:2.8.3` container `kind-registry`, `localhost:5001` (trong cluster: `http://kind-registry:5000`) | `ci/setup-local-registry.ps1` |
 | App | `booking` (HPA 3-20), `payment` (HPA 3-10), `user` x3, `driver` x3, `notification` x2 - image `localhost:5001/<svc>-service:<git-sha>` (tag đang chạy: `helm-values/<svc>-image.yaml`); probe, PDB, topologySpread (`matchLabelKeys`), preStop 10s, keepAliveTimeout 65s, requests/limits, không mount ServiceAccount token, failover 30s | `ci/pipeline.ps1` → Git → Argo CD: ApplicationSet `grab-services` (chart `grab-service`) |
 | Platform | ConfigMap `booking-config`, Ingress `/users` `/booking` `/payment` `/payments` `/drivers`, 12 NetworkPolicy (default-deny + 4 luồng ingress + 5 `egress-<app>`), Ingress retry (`proxy-connect-timeout 1s`, `next-upstream`), CronJob `settlement-job`, StatefulSet `postgres` (bảng `payments`, role `payment`), Job `db-init` (PostSync), Deployment `redis` (toleration 30s) | Git → Argo CD: `grab-platform` (không prune) |
-| Secret | `payment-db` (user DB `payment`, password ngẫu nhiên), `booking-secret` (không còn service nào dùng) | `kubectl create secret` (cố ý ngoài Git) |
+| Secret | `postgres-superuser` (superuser Postgres), `payment-db` (user DB `payment`) - cả 2 password ngẫu nhiên | `kubectl create secret` (cố ý ngoài Git) |
 | Hạ tầng | `ingress-nginx` (+ patch nodeSelector), `metrics-server` (+ patch insecure-tls) | `kubectl apply` từ URL upstream |
 | Monitoring | `kube-prometheus-stack` 93.1.1, Loki 7.5.0, Alloy 1.15.0 (namespace `monitoring`) | Helm: `monitoring`, `loki`, `alloy` |
 | Monitoring config | ServiceMonitor, PrometheusRule (8 alert: error rate, p95, no pods, restarting, OOMKilled, memory near limit, memory leak, target down), `alert-webhook`, dashboard Grafana | `kubectl apply -f k8s/monitoring/` |
@@ -268,7 +268,7 @@ kubectl apply -f k8s/booking-configmap.yaml
 
 kubectl create secret generic booking-secret `
   --from-literal=DB_USERNAME=admin `
-  --from-literal=DB_PASSWORD=change-me
+  --from-literal=DB_PASSWORD=<random>
 
 kubectl rollout restart deployment/booking
 kubectl rollout status deployment/booking
@@ -754,7 +754,7 @@ kind load docker-image booking-service:v1 --name grab-mini
 kubectl apply -f k8s/booking-configmap.yaml
 kubectl create secret generic booking-secret `
   --from-literal=DB_USERNAME=admin `
-  --from-literal=DB_PASSWORD=change-me
+  --from-literal=DB_PASSWORD=<random>
 
 kubectl apply -f k8s/user-deployment.yaml -f k8s/user-service.yaml
 kubectl apply -f k8s/payment-deployment.yaml -f k8s/payment-service.yaml
@@ -912,7 +912,7 @@ spec:
           image: postgres:16-alpine
           env:
             - name: POSTGRES_PASSWORD
-              value: "change-me"
+              value: "<random>"
             - name: POSTGRES_DB
               value: "grabmini"
             # subdir avoids initdb "directory not empty" if the volume root has lost+found
@@ -1013,7 +1013,7 @@ spec:
           image: postgres:16-alpine
           env:
             - name: POSTGRES_PASSWORD
-              value: "change-me"
+              value: "<random>"
             - name: POSTGRES_DB
               value: "grabmini"
             - name: PGDATA
@@ -1116,7 +1116,7 @@ kind load docker-image booking-service:v1 --name grab-mini
 
 # --- Bước 3: replay ConfigMap + Secret + Deployment + Service ---
 kubectl apply -f k8s/booking-configmap.yaml
-kubectl create secret generic booking-secret --from-literal=DB_USERNAME=admin --from-literal=DB_PASSWORD=change-me
+kubectl create secret generic booking-secret --from-literal=DB_USERNAME=admin --from-literal=DB_PASSWORD=<random>
 kubectl apply -f k8s/user-deployment.yaml -f k8s/user-service.yaml
 kubectl apply -f k8s/payment-deployment.yaml -f k8s/payment-service.yaml
 kubectl apply -f k8s/booking-deployment.yaml -f k8s/booking-service.yaml
@@ -2107,7 +2107,7 @@ helm upgrade user charts/grab-service -f helm-values/user.yaml -f helm-values/en
 
 # --- Bước 6: môi trường DEV = cùng chart, khác values, khác namespace ---
 kubectl create namespace grab-dev
-kubectl create secret generic booking-secret -n grab-dev --from-literal=DB_USERNAME=dev --from-literal=DB_PASSWORD=dev-only
+kubectl create secret generic booking-secret -n grab-dev --from-literal=DB_USERNAME=dev --from-literal=DB_PASSWORD=<random>
 helm upgrade --install grab-platform charts/grab-platform -n grab-dev -f helm-values/platform-dev.yaml --wait
 foreach ($s in "payment","user","booking") { helm upgrade --install $s charts/grab-service -n grab-dev -f "helm-values/$s.yaml" -f helm-values/env-dev.yaml --wait }
 helm list -n grab-dev
@@ -2198,7 +2198,7 @@ ingress:
 settlement:
   enabled: false
 postgres:
-  password: dev-only
+  password: <random>
 ```
 
 **✅ Kết quả thật đã verify (11/11/2026):**
@@ -2851,7 +2851,9 @@ helm upgrade --install alloy grafana/alloy --version 1.15.0 -n monitoring -f k8s
 kubectl apply -f k8s/monitoring/servicemonitor-apps.yaml -f k8s/monitoring/alerts-apps.yaml -f k8s/monitoring/alert-webhook.yaml -f k8s/monitoring/grab-mini-dashboard-cm.yaml
 
 # --- 5. app: Secret (ngoài Git) -> Argo CD -> bootstrap 1 lệnh; Argo CD tự dựng platform + 5 service từ Git ---
-#   payment-db PHẢI có trước: Job db-init (PostSync của grab-platform) đọc password từ đây
+#   2 Secret PHẢI có trước: postgres-superuser (StatefulSet postgres initdb + Job db-init), payment-db (db-init tạo role payment, payment-service dùng)
+$pw = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(24)) -replace '[+/=]', ''
+kubectl create secret generic postgres-superuser --from-literal=POSTGRES_PASSWORD=$pw
 $pw = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(24)) -replace '[+/=]', ''
 kubectl create secret generic payment-db --from-literal=DB_USERNAME=payment --from-literal=DB_PASSWORD=$pw; Remove-Variable pw
 helm repo add argo https://argoproj.github.io/argo-helm
@@ -2963,6 +2965,7 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 | Pod bị chiếm: ingress policy chặn DB nhưng vẫn ra Internet / K8s API (token mount) / namespace khác → egress policy + `automountServiceAccountToken: false` | [26](#scenario-26) |
 | Keep-alive: server phải giữ lâu hơn proxy (Node 5s < nginx 60s → 502 hiếm); `keepAliveTimeout 65s` | [26](#scenario-26) |
 | HPA `Degraded` thoáng qua sau rollout (chưa có metric Pod mới) → pipeline chỉ fail khi Degraded > 30s | [26](#scenario-26) |
+| Password superuser Postgres nằm trong `values.yaml` của repo **public** (13/11 mới phát hiện) → chuyển sang Secret `postgres-superuser` + `ALTER USER` đổi password (giá trị cũ còn trong lịch sử Git mãi mãi - chỉ xoá khỏi file là **không đủ**); `POSTGRES_PASSWORD` chỉ có tác dụng lúc initdb | [rebuild](#rebuild) |
 
 **Observability**
 
@@ -3023,20 +3026,18 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 **App**
 - Driver/notification là bản tối giản: danh sách tài xế cố định, notification chỉ ghi log (chưa gửi SMS/push), chưa có queue (booking gọi notification đồng bộ - nên đổi sang message queue / outbox).
 - Chưa có migration tool (Flyway / node-pg-migrate) - schema nằm trong Job `db-init`; chưa có bảng `bookings` (booking không lưu gì).
-- `booking-secret` không còn service nào dùng - có thể xoá.
 - Image `<svc>-service:v1/v2/v3` (bản `kind load` cũ của Phase 2-21) vẫn còn trên node + Docker Desktop nhưng không còn dùng - prod chạy `localhost:5001/<svc>-service:<sha>`.
 
 **CI/CD + GitOps**
 - CD chạy qua **self-hosted runner** trên máy local ([23b](#scenario-23b)) - máy tắt = không deploy được; runner chưa tự khởi động khi đăng nhập. Chưa có registry chung mà cả runner GitHub lẫn cluster cùng dùng được.
 - Chưa scan lỗ hổng image (Trivy...); chưa có môi trường staging (deploy thẳng prod), chưa có approval / branch protection cho `main`.
 - Argo CD: chưa có webhook (poll 60s), chưa có notifications (Slack) khi sync lỗi, chưa đổi password admin / tắt user admin, chưa scrape metrics Argo CD vào Prometheus. Monitoring, ingress-nginx, metrics-server và chính Argo CD **chưa** được quản lý bằng Argo CD (vẫn Helm/kubectl tay).
-- `booking-secret` vẫn tạo tay (ngoài Git) → Argo CD không dựng lại được nếu thiếu; cần Sealed Secrets / External Secrets.
+- `postgres-superuser`, `payment-db` tạo tay (ngoài Git) → Argo CD không dựng lại được nếu thiếu; cần Sealed Secrets / External Secrets.
 - Chưa giảm `progressDeadlineSeconds` → Argo CD chỉ báo `Degraded` sau 10 phút.
 - Sửa file dùng chung (`env-prod.yaml`, chart `grab-service`) = rollout **mọi** service cùng lúc - chưa có cách tách đợt (sync-wave / từng app).
 - Registry không có volume: xoá container `kind-registry` = mất mọi image (kể cả bản đang chạy). Registry còn image rác (`registry-test`, `booking-service:989561244027` của Demo C) - `registry:2` mặc định tắt API xoá.
 
 **Vận hành**
-- `booking-secret` tạo tay → cân nhắc Sealed Secrets / External Secrets.
 - `ingress-nginx` (v1.15.1) và `metrics-server` (v0.9.1) đã pin trong runbook, nhưng vẫn cài bằng `kubectl apply` tay - chưa quản lý bằng Argo CD.
 - Postgres dùng `local-path` (1 node) - chưa có replication/backup. Redis 1 replica, không lưu đĩa (cache - chấp nhận mất).
 - **Khuyến nghị từ Production Simulation (chưa làm)**:

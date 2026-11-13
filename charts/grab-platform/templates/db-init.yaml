@@ -2,7 +2,7 @@
 # Final Project - tạo user DB "payment" + bảng payments. Idempotent (chạy lại bao nhiêu lần cũng được).
 #   - Argo CD: hook PostSync -> chạy SAU khi mọi resource của grab-platform (gồm postgres) đã Healthy, mỗi lần sync
 #   - helm install/upgrade tay: hook post-install/post-upgrade (Helm hiểu annotation helm.sh/hook; Argo CD cũng map được)
-# Password user "payment" lấy từ Secret payment-db (tạo tay, ngoài Git - giống booking-secret):
+# Password: superuser từ Secret postgres-superuser, user "payment" từ Secret payment-db (cả 2 tạo tay, ngoài Git):
 #   kubectl create secret generic payment-db --from-literal=DB_USERNAME=payment --from-literal=DB_PASSWORD=<random>
 apiVersion: batch/v1
 kind: Job
@@ -31,7 +31,9 @@ spec:
             - { name: PGHOST, value: postgres }
             - { name: PGDATABASE, value: {{ .Values.postgres.database | quote }} }
             - { name: PGUSER, value: postgres }
-            - { name: PGPASSWORD, value: {{ .Values.postgres.password | quote }} }   # superuser - CHỈ Job này dùng
+            - name: PGPASSWORD   # superuser - CHỈ Job này dùng
+              valueFrom:
+                secretKeyRef: { name: {{ required "postgres.passwordSecret là bắt buộc" .Values.postgres.passwordSecret }}, key: POSTGRES_PASSWORD }
             - name: APP_PASSWORD
               valueFrom:
                 secretKeyRef: { name: {{ .Values.dbInit.secretName }}, key: DB_PASSWORD }

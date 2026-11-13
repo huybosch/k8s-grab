@@ -2,8 +2,8 @@
 #   prod: helm upgrade --install grab-platform charts/grab-platform
 #   dev : helm upgrade --install grab-platform charts/grab-platform -n grab-dev -f helm-values/platform-dev.yaml
 # Secret KHÔNG nằm trong chart (không commit password vào Git) - tạo tay trong mỗi namespace:
-#   kubectl create secret generic booking-secret -n <ns> --from-literal=DB_USERNAME=... --from-literal=DB_PASSWORD=...
-#   kubectl create secret generic payment-db     -n <ns> --from-literal=DB_USERNAME=payment --from-literal=DB_PASSWORD=<random>
+#   kubectl create secret generic postgres-superuser -n <ns> --from-literal=POSTGRES_PASSWORD=<random>
+#   kubectl create secret generic payment-db         -n <ns> --from-literal=DB_USERNAME=payment --from-literal=DB_PASSWORD=<random>
 
 bookingConfig:
   name: booking-config
@@ -68,7 +68,9 @@ postgres:
   enabled: true
   image: postgres:16-alpine
   database: grabmini
-  password: change-me      # CHỈ cho lab - production dùng Secret / External Secrets
+  # Secret tạo tay (ngoài Git), key POSTGRES_PASSWORD:
+  #   kubectl create secret generic postgres-superuser --from-literal=POSTGRES_PASSWORD=<random>
+  passwordSecret: postgres-superuser
   storage: 1Gi
 
 # Final Project - Job tạo user DB "payment" + bảng payments (xem templates/db-init.yaml)

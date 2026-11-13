@@ -34,8 +34,12 @@ spec:
         - name: postgres
           image: {{ .Values.postgres.image }}
           env:
+            # password superuser lấy từ Secret tạo tay (ngoài Git). Trước 13/11/2026 nằm thẳng trong values.yaml
+            # của repo PUBLIC -> đã đổi password (ALTER USER), giá trị cũ trong lịch sử Git không còn dùng được.
+            # Lưu ý: biến này CHỈ có tác dụng lúc initdb (volume trống); đổi Secret KHÔNG đổi password của DB đang chạy.
             - name: POSTGRES_PASSWORD
-              value: {{ .Values.postgres.password | quote }}
+              valueFrom:
+                secretKeyRef: { name: {{ required "postgres.passwordSecret là bắt buộc" .Values.postgres.passwordSecret }}, key: POSTGRES_PASSWORD }
             - name: POSTGRES_DB
               value: {{ .Values.postgres.database | quote }}
             # subdir avoids initdb "directory not empty" if the volume root has lost+found
