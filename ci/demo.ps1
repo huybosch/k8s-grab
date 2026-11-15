@@ -109,6 +109,7 @@ switch ($Scene) {
   6 {
     Title "6. Release lỗi -> canary 1/3 traffic -> analysis thấy lỗi -> TỰ huỷ"
     Sync-Main
+    $hash0 = kubectl get rollouts.argoproj.io booking -o jsonpath='{.status.currentPodHash}'
     Start-Traffic 150
     Start-Sleep 5
     $v = "helm-values/booking.yaml"
@@ -117,6 +118,9 @@ switch ($Scene) {
     kubectl -n argocd annotate application booking argocd.argoproj.io/refresh=normal --overwrite | Out-Null
     $sw = [Diagnostics.Stopwatch]::StartNew()
     Say "đã push release lỗi - /health vẫn OK nên readiness KHÔNG chặn được; lần này booking là canary"
+    # đợi Argo CD áp bản mới vào Rollout (hash Pod đổi) - trước đó Rollout vẫn Healthy với bản CŨ
+    do { Start-Sleep 1 } until ((kubectl get rollouts.argoproj.io booking -o jsonpath='{.status.currentPodHash}') -ne $hash0 -or $sw.Elapsed.TotalSeconds -gt 120)
+    Say "Argo CD áp bản lỗi vào Rollout sau $(Elapsed $sw)"
     $last = ""; $first500 = $null
     do {
       Start-Sleep 1
