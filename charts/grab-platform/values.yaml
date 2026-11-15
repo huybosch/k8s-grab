@@ -73,6 +73,10 @@ postgres:
   passwordSecret: postgres-superuser
   storage: 1Gi
 
+# Sealed Secrets (15/11): Secret postgres-superuser + payment-db lấy từ templates/sealedsecret-*.yaml (mã hoá cho namespace default)
+sealedSecrets:
+  enabled: true
+
 # Final Project - Job tạo user DB "payment" + bảng payments (xem templates/db-init.yaml)
 dbInit:
   enabled: true

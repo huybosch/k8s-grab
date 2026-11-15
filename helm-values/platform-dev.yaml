@@ -5,4 +5,6 @@ ingress:
   host: dev.grab.local
 settlement:
   enabled: false           # dev không cần chạy settlement hằng đêm
-# postgres: dùng Secret postgres-superuser trong namespace grab-dev (tạo tay, như prod)
+# postgres: dùng Secret postgres-superuser + payment-db trong namespace grab-dev (tạo tay - SealedSecret của prod chỉ giải mã cho namespace default)
+sealedSecrets:
+  enabled: false
