@@ -10,14 +10,15 @@ Mỗi cảnh chạy bằng **1 lệnh** `./ci/demo.ps1 <số>` (PowerShell 7, th
                     Ingress (nginx, retry khi Pod chết)
        /users        /booking         /payment(s)        /drivers
          │               │                 │                 │
-     user (x3) ──┐   booking (HPA 3-20) ─► payment (HPA 3-10) ─► Postgres (StatefulSet)
+     user (x3) ──┐   booking (canary, HPA 3-20) ─► payment (HPA 3-10) ─► Postgres (StatefulSet)
          │       │       │                                       ▲ chỉ payment vào được
        Redis ◄───┘       └──► notification (x2) ◄── driver (x3)
                          (best-effort, timeout 1s)
 
- Git (github.com/huybosch/k8s-grab) ──► Argo CD (app-of-apps, 7 Application) ──► cluster
+ Git (github.com/huybosch/k8s-grab) ──► Argo CD (app-of-apps, 9 Application) ──► cluster
  git push code ──► self-hosted runner ──► test → build → push registry → commit tag ──► Argo CD
  Prometheus + Grafana + Loki + Alertmanager; 12 NetworkPolicy (default-deny, cả ingress + egress)
+ Secret: SealedSecret trong Git; backup Postgres mỗi đêm (CronJob) + restore thử; booking: Argo Rollouts canary
 ```
 
 ## Chuẩn bị (5 phút trước demo)
@@ -25,7 +26,7 @@ Mỗi cảnh chạy bằng **1 lệnh** `./ci/demo.ps1 <số>` (PowerShell 7, th
 ```powershell
 cd D:\OBsidian\NUO3HC\Kubernetes\grab-mini
 git pull --rebase origin main                           # cảnh 3, 6 tạo commit - local phải mới nhất
-kubectl get applications -n argocd                      # 7 app Synced Healthy
+kubectl get applications -n argocd                      # 9 app Synced Healthy
 Get-Process Runner.Listener                             # runner đang chạy? không có -> Start-Process C:\actions-runner\run.cmd
 kubectl get hpa                                         # booking về 3 replica (sau cảnh 7 lần tập: đợi ~5 phút)
 # terminal phụ: Grafana
@@ -45,14 +46,14 @@ Nếu cluster hỏng: [runbook dựng lại](COMMANDS.md#rebuild) - đã chạy 
 | 3 | Deploy = `git push` | không ai gõ lệnh deploy; 0 lỗi | 2' |
 | 4 | Self-heal | sửa tay bị Argo CD đè lại | 0.5' |
 | 5 | Pod chết | người dùng không thấy gì | 1' |
-| 6 | Release lỗi | Kubernetes không bắt được lỗi logic → rollback 1 lệnh | 2.5' |
+| 6 | Release lỗi | Kubernetes không bắt được lỗi logic → canary + analysis **tự huỷ** | 2.5' |
 | 7 | Tải 10x | HPA tự thêm Pod | 1.5' |
 | 8 | Bảo mật | Pod bị chiếm vẫn bị nhốt | 1' |
 | - | Grafana + Hỏi đáp | | 4' |
 
 ### 1. Tổng quan - `./ci/demo.ps1 1`
 
-> "3 node: 1 control-plane, 2 worker. Mỗi service có Pod trên **cả 2 worker** - mất 1 máy vẫn chạy. 7 Application trong Argo CD đều Synced: cluster đang khớp đúng từng dòng trong Git."
+> "3 node: 1 control-plane, 2 worker. Mỗi service có Pod trên **cả 2 worker** - mất 1 máy vẫn chạy. 9 Application trong Argo CD đều Synced: cluster đang khớp đúng từng dòng trong Git."
 
 Kết quả tập: booking/payment/user `worker, worker2, worker2`, notification `worker, worker2`; 7 app `Synced Healthy`; HPA booking 3-20, payment 3-10.
 
@@ -64,9 +65,9 @@ Kết quả tập: `payments trong DB: 2 -> 2` sau khi gửi lại cùng `paymen
 
 ### 3. Deploy = git push - `./ci/demo.ps1 3`
 
-> "Tôi sửa code booking và `git push`. Từ đây không gõ thêm lệnh nào: runner trên máy này chạy test → build image (tag = git SHA) → chạy thử container → push registry → commit tag vào Git. Argo CD thấy commit, rolling update từng Pod. Trong lúc đó traffic vẫn chạy."
+> "Tôi sửa code booking và `git push`. Từ đây không gõ thêm lệnh nào: runner trên máy này chạy test → build image (tag = git SHA) → chạy thử container → push registry → commit tag vào Git. Argo CD thấy commit; booking là **canary**: 1 Pod mới nhận ~1/3 traffic trong 45s, rồi 2/3 trong 30s, rồi 100% - suốt quá trình Argo Rollouts đo error rate trên Prometheus. Traffic vẫn chạy."
 
-Kết quả tập: Argo CD nhận tag mới sau **31s**, rollout xong **47s**; traffic **5315/5315 OK, 0 lỗi**; runner tự tạo commit `deploy(booking): fd3997aed46d`. Mở tab GitHub Actions để chỉ job `cd` chạy trên runner `grab-mini-local`.
+Kết quả tập (15/11, sau khi chuyển canary): Argo CD nhận tag mới sau **39s**, canary 1/3 → 2/3 → 100% xong sau **131s**; traffic **3200/3200 OK, 0 lỗi**; runner tự tạo commit `deploy(booking): 3d6405e27f9e`; job `cd` success. Mở tab GitHub Actions để chỉ job `cd` chạy trên runner `grab-mini-local`.
 
 ### 4. Self-heal - `./ci/demo.ps1 4`
 
@@ -82,11 +83,11 @@ Kết quả tập: **1400/1400 OK, 0 lỗi**.
 
 ### 6. Release lỗi - `./ci/demo.ps1 6`
 
-> "Giờ tôi đẩy một config lỗi: booking trả 500. `/health` vẫn OK nên **Kubernetes không biết** - readiness probe chỉ kiểm tra process sống, không kiểm tra logic. Rollback là `git revert` - 1 lệnh."
+> "Giờ tôi đẩy một config lỗi: booking trả 500. `/health` vẫn OK nên **Kubernetes không biết** - readiness probe chỉ kiểm tra process sống, không kiểm tra logic. Nhưng bản mới chỉ được 1 Pod (~1/3 traffic); Argo Rollouts đo error rate mỗi 15s - vượt 5% hai lần là **tự huỷ**, không cần ai bấm."
 
-Kết quả tập: lỗi xuất hiện **9s** sau push (Argo CD lúc đó vẫn báo `Progressing`); `rollback.ps1` xong **25s**; chỉ `/booking` lỗi (218 request), **4 endpoint khác 0 lỗi** (lỗi được khoanh trong 1 service). Alert `GrabMiniHighErrorRate` chuyển `pending` nhưng chưa kịp `firing` (`for: 1m`) - rollback nhanh hơn alert.
+Kết quả tập (15/11): Argo CD áp bản lỗi sau **2s**, 500 đầu tiên **+9s** (chỉ từ Pod canary), **TỰ ABORT +43s** (`Metric "error-rate" assessed Failed due to failed (2) > failureLimit (1)`). Booking **102 request lỗi** (khoảng 1/3 request booking trong ~42s), 4 endpoint khác 0 lỗi. Sau abort, `rollback.ps1` chỉ dọn Git (revert commit lỗi): **6s**, không tạo Pod mới.
 
-> Nói thêm: "Ở Incident 2, lần đầu mất ~5 phút mới ra khỏi sự cố (đợi alert, đợi Argo CD poll 60s). Bước tiếp theo là canary tự huỷ khi error rate tăng - xem phần còn yếu."
+> So sánh để nói: trước canary (13/11) cùng release lỗi → **100%** request booking lỗi, **218** request, phải có người chạy `rollback.ps1`. Lần đầu ở Incident 2 (chưa có gì) → ~5 phút mới ra khỏi sự cố.
 
 ### 7. Tải 10x - `./ci/demo.ps1 7`
 
@@ -127,9 +128,9 @@ Dashboard `grab-mini-services`: request rate, error rate (thấy rõ vạch lỗ
 
 | Điểm yếu | Hậu quả | Hướng xử lý |
 |---|---|---|
-| Không có canary / progressive delivery | release lỗi tới 100% người dùng trong ~9s; phải có người bấm rollback | Argo Rollouts + AnalysisTemplate theo error rate (tự abort) |
-| Postgres 1 replica, không backup tự động | mất node / xoá cluster = mất data (runbook chỉ có `pg_dumpall` tay) | CloudNativePG / RDS, backup định kỳ (CronJob) |
-| Secret tạo tay ngoài Git (`payment-db`) | Argo CD không tự dựng lại được nếu thiếu | Sealed Secrets / External Secrets |
+| Canary chỉ cho booking, không mesh | bước nhỏ nhất = 1/3 traffic; analysis đo cả service → lỗi nhẹ ở canary bị pha loãng, có thể lọt ngưỡng 5% | trafficRouting nginx (canary 5-10%) + metric theo revision; canary cho 4 service còn lại |
+| Postgres 1 replica; backup mỗi đêm nằm trong cluster | mất node = DB dừng; mất cluster = mất cả backup nếu chưa chạy `ci/pg-backup-pull.ps1` | CloudNativePG / RDS; đẩy backup ra object storage (S3) tự động |
+| Khoá Sealed Secrets chỉ có 1 bản trên máy cá nhân | mất máy = mất khoá = không giải mã được Secret trong Git | lưu khoá ở nơi thứ 2 (password manager); trên cloud: External Secrets + AWS Secrets Manager |
 | Alertmanager + alert-webhook 1 replica, alert chưa gửi kênh thật | mất node = mất kênh báo động; không ai nhận alert | 2 replica trải 2 node, receiver Slack/Telegram |
 | CD phụ thuộc máy cá nhân | tắt máy = không deploy được | EKS + registry chung (ECR), runner GitHub push image |
 | Hạ tầng ngoài Argo CD | ingress-nginx, metrics-server, monitoring, Argo CD vẫn cài tay (đã pin version) | đưa vào app-of-apps |

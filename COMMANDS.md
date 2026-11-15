@@ -10,14 +10,14 @@ Nhật ký lab: mỗi **Scenario** = lệnh đã chạy thật + code liên quan
 |---|---|---|
 | Cluster | `kind` v0.33, `grab-mini`, 1 control-plane (port 80/443 ra host) + 2 worker - `kind-multi-node.yaml` | `kind` |
 | Code | `grab-mini/` = repo `github.com/huybosch/k8s-grab` (public, nhánh `main`); mỗi lần deploy = 1 commit `deploy(<svc>): <sha>`, rollback = commit `Revert ...` | `git` + GitHub Actions `ci.yaml` (test + build + chạy thử container) |
-| GitOps | Argo CD 3.6.1 (namespace `argocd`): `root` → AppProject `grab-mini`, ApplicationSet `grab-services` (booking/payment/user), `grab-platform`; poll Git 60s, selfHeal | Helm: `argocd` (`k8s/argocd/values.yaml`) + `kubectl apply -f argocd/root.yaml` (1 lần) |
+| GitOps | Argo CD 3.6.1 (namespace `argocd`): `root` → AppProject `grab-mini`, ApplicationSet `grab-services` (5 service), `grab-platform`, `sealed-secrets`, `argo-rollouts`; poll Git 60s, selfHeal; health Lua cho PVC `WaitForFirstConsumer` | Helm: `argocd` (`k8s/argocd/values.yaml`) + `kubectl apply -f argocd/root.yaml` (1 lần) |
 | Registry | `registry:2.8.3` container `kind-registry`, `localhost:5001` (trong cluster: `http://kind-registry:5000`) | `ci/setup-local-registry.ps1` |
-| App | `booking` (HPA 3-20), `payment` (HPA 3-10), `user` x3, `driver` x3, `notification` x2 - image `localhost:5001/<svc>-service:<git-sha>` (tag đang chạy: `helm-values/<svc>-image.yaml`); probe, PDB, topologySpread (`matchLabelKeys`), preStop 10s, keepAliveTimeout 65s, requests/limits, không mount ServiceAccount token, failover 30s | `ci/pipeline.ps1` → Git → Argo CD: ApplicationSet `grab-services` (chart `grab-service`) |
-| Platform | ConfigMap `booking-config`, Ingress `/users` `/booking` `/payment` `/payments` `/drivers`, 12 NetworkPolicy (default-deny + 4 luồng ingress + 5 `egress-<app>`), Ingress retry (`proxy-connect-timeout 1s`, `next-upstream`), CronJob `settlement-job`, StatefulSet `postgres` (bảng `payments`, role `payment`), Job `db-init` (PostSync), Deployment `redis` (toleration 30s) | Git → Argo CD: `grab-platform` (không prune) |
-| Secret | `postgres-superuser` (superuser Postgres), `payment-db` (user DB `payment`) - cả 2 password ngẫu nhiên | `kubectl create secret` (cố ý ngoài Git) |
+| App | `booking` (**Argo Rollout canary** 1/3 → 2/3 → 100%, tự abort theo error rate; HPA 3-20), `payment` (HPA 3-10), `user` x3, `driver` x3, `notification` x2 - image `localhost:5001/<svc>-service:<git-sha>` (tag đang chạy: `helm-values/<svc>-image.yaml`); probe, PDB, topologySpread (`matchLabelKeys`), preStop 10s, keepAliveTimeout 65s, requests/limits, không mount ServiceAccount token, failover 30s | `ci/pipeline.ps1` → Git → Argo CD: ApplicationSet `grab-services` (chart `grab-service`) |
+| Platform | ConfigMap `booking-config`, Ingress `/users` `/booking` `/payment` `/payments` `/drivers`, 12 NetworkPolicy (default-deny + 4 luồng ingress + 5 `egress-<app>`), Ingress retry (`proxy-connect-timeout 1s`, `next-upstream`), CronJob `settlement-job` (`node:22-alpine`), CronJob `pg-backup` (02:00 VN, PVC 7 bản), StatefulSet `postgres` (bảng `payments`, role `payment`), Job `db-init` (PostSync), Deployment `redis` (toleration 30s) | Git → Argo CD: `grab-platform` (không prune) |
+| Secret | `postgres-superuser` (superuser Postgres), `payment-db` (user DB `payment`) - password ngẫu nhiên, **SealedSecret trong Git**; khoá giải mã: `%USERPROFILE%\backups\grab-mini\sealed-secrets-key.yaml` (ngoài Git) | Git → Argo CD (`grab-platform`) → controller `sealed-secrets` |
 | Hạ tầng | `ingress-nginx` (+ patch nodeSelector), `metrics-server` (+ patch insecure-tls) | `kubectl apply` từ URL upstream |
 | Monitoring | `kube-prometheus-stack` 93.1.1, Loki 7.5.0, Alloy 1.15.0 (namespace `monitoring`) | Helm: `monitoring`, `loki`, `alloy` |
-| Monitoring config | ServiceMonitor, PrometheusRule (8 alert: error rate, p95, no pods, restarting, OOMKilled, memory near limit, memory leak, target down), `alert-webhook`, dashboard Grafana | `kubectl apply -f k8s/monitoring/` |
+| Monitoring config | ServiceMonitor, PrometheusRule (11 alert: error rate, p95, no pods, restarting, OOMKilled, memory near limit, memory leak, target down, Pod kẹt, Job lỗi, backup cũ), `alert-webhook`, dashboard Grafana | `kubectl apply -f k8s/monitoring/` |
 
 ## 📋 Menu
 
@@ -49,6 +49,7 @@ Nhật ký lab: mỗi **Scenario** = lệnh đã chạy thật + code liên quan
 - [Scenario 24 - GitOps: Argo CD + app-of-apps, deploy = git push (Phase 24)](#scenario-24)
 - [Scenario 25 - Final Project: ráp đủ Grab Mini Platform (5 service + Redis + PostgreSQL)](#scenario-25)
 - [Scenario 26 - Production Simulation: Incident 1-7 (gây sự cố thật, đo, xử lý, vá)](#scenario-26)
+- [Scenario 27 - Sealed Secrets, backup Postgres tự động, Argo Rollouts canary](#scenario-27)
 - [Cleanup - xoá image Docker cũ không dùng](#cleanup)
 - [🔁 Dựng lại toàn bộ cluster từ đầu](#rebuild)
 - [🧠 Tổng hợp bài học](#bai-hoc)
@@ -2784,6 +2785,136 @@ kubectl top pods -l app=user; kubectl describe pod <user-pod> | Select-String "L
 
 ---
 
+<a id="scenario-27"></a>
+## Scenario 27 - Sealed Secrets, backup Postgres tự động, Argo Rollouts canary (vá điểm yếu sau demo)
+
+3 lỗ hổng còn lại trong bảng "Phần còn yếu" của [DEMO.md](DEMO.md): Secret tạo tay ngoài Git, Postgres không backup, release lỗi tới 100% người dùng. Làm 15/11/2026.
+
+| Phần | Trước | Sau | Kiểm chứng |
+|---|---|---|---|
+| Secret | `kubectl create secret` tay, ngoài Git | `SealedSecret` (mã hoá) trong Git; chỉ còn giữ **1 file khoá** ngoài Git | xoá Secret → tạo lại sau 1s; xoá khoá trong cluster + khôi phục từ file → giải mã lại được, đăng nhập Postgres OK |
+| Backup | chỉ `pg_dumpall` tay | CronJob `pg-backup` mỗi đêm (19:00 UTC = 02:00 VN), giữ 7 bản; `ci/pg-backup-pull.ps1` copy ra ngoài + **restore thử** | bản backup 18544 payment = DB thật 18544 |
+| Release lỗi | 100% booking lỗi, người chạy `rollback.ps1` | canary 1/3 Pod, AnalysisTemplate đo error rate → **tự abort** | 102 request lỗi (trước 218), abort sau 43s, không ai can thiệp |
+
+```text
+Git (public)                                    cluster
+charts/grab-platform/templates/                 kube-system/sealed-secrets-controller (private key)
+  sealedsecret-payment-db.yaml (mã hoá) ──Argo CD──► SealedSecret ──giải mã──► Secret payment-db
+  sealedsecret-postgres-superuser.yaml                                          Secret postgres-superuser
+                                                CronJob pg-backup ──pg_dump -Fc──► PVC pg-backup (7 bản)
+                                                         ci/pg-backup-pull.ps1 ──► %USERPROFILE%\backups\grab-mini (+ restore thử)
+charts/grab-service (rollout.enabled)           Rollout booking: 1/3 Pod (45s) → 2/3 (30s) → 100%
+                                                  └ AnalysisRun nền: error rate 5xx (Prometheus) > 5% x2 → ABORT
+```
+
+### 1. Sealed Secrets
+
+```powershell
+# controller: argocd/apps/sealed-secrets.yaml (chart sealed-secrets 2.22.0 = app 0.41.2, project default, ns kube-system)
+#   repo chart ĐÚNG: https://bitnami.github.io/sealed-secrets   (bitnami-labs.github.io/sealed-secrets -> 404)
+# kubeseal 0.41.2 (kiểm SHA256 theo sealed-secrets_0.41.2_checksums.txt) -> %USERPROFILE%\bin\kubeseal.exe
+
+# NGAY sau khi controller chạy: backup khoá (thứ DUY NHẤT phải giữ ngoài Git - không commit, không gửi đi)
+kubectl -n kube-system get secret -l sealedsecrets.bitnami.com/sealed-secrets-key -o yaml > "$env:USERPROFILE\backups\grab-mini\sealed-secrets-key.yaml"
+
+# mã hoá Secret đang có (annotation managed=true: cho controller tiếp quản Secret đã tồn tại)
+kubectl annotate secret payment-db sealedsecrets.bitnami.com/managed=true
+kubectl get secret payment-db -o json | kubeseal --format yaml --controller-namespace kube-system --controller-name sealed-secrets-controller > charts/grab-platform/templates/sealedsecret-payment-db.yaml
+# (tương tự postgres-superuser) rồi bọc {{- if .Values.sealedSecrets.enabled }} + sync-wave "-1"
+
+# thử như dựng lại cluster: mất khoá -> khôi phục từ file
+kubectl -n kube-system delete secret -l sealedsecrets.bitnami.com/sealed-secrets-key
+kubectl delete secret payment-db postgres-superuser
+kubectl apply -f "$env:USERPROFILE\backups\grab-mini\sealed-secrets-key.yaml"
+kubectl -n kube-system rollout restart deploy/sealed-secrets-controller
+kubectl get secret payment-db postgres-superuser          # tạo lại
+```
+
+Kết quả: SealedSecret `Synced=True`, Secret có `ownerReferences: SealedSecret`. Xoá Secret → tạo lại sau **1s**. Mất khoá + khôi phục từ file → 2/2 Secret giải mã lại; Pod tạm dùng `postgres-superuser` và `payment-db` đăng nhập Postgres được (`select count(*) from payments` = 18543); restart payment → `POST /payment` OK.
+
+### 2. Backup Postgres + 2 lỗi tìm thấy trên đường
+
+`charts/grab-platform/templates/pg-backup.yaml` (lõi):
+
+```yaml
+spec:
+  schedule: "0 19 * * *"           # UTC
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata: { labels: { app: pg-backup } }   # NetworkPolicy postgres: from [payment, db-init, pg-backup]
+        spec:
+          containers:
+            - image: postgres:16-alpine            # cùng bản pg_dump với server
+              args:
+                - |
+                  pg_dump -Fc -f "$f.part"                       # -Fc: KHÔNG chứa role/password (khác pg_dumpall)
+                  pg_restore --list "$f.part" > /dev/null        # đọc được mới tính là backup
+                  mv "$f.part" "$f"                              # không bao giờ có .dump dở dang
+                  ls -1t /backup/*.dump | tail -n +$((KEEP + 1)) | xargs -r rm -f
+```
+
+```powershell
+./ci/pg-backup-pull.ps1 -Now   # backup ngay -> copy về máy -> restore vào DB tạm restore_check -> so số dòng -> xoá DB tạm
+#   backup ok: /backup/grabmini-20261115-030426.dump (524.0K)
+#   copy: C:\Users\dzkho\backups\grab-mini\grabmini-20261115-030426.dump (523 KB)
+#   restore thử: payments trong bản backup = 18544, DB đang chạy = 18544
+```
+
+Lỗi gặp phải:
+
+- **Argo CD kẹt sync vì PVC Pending**: `local-path` = `WaitForFirstConsumer` → PVC `pg-backup` Pending tới lần backup đầu (19:00) → health mặc định `Progressing` → sync `waiting for healthy state of PVC/pg-backup` mãi → **hook PostSync `db-init` không chạy** (cluster mới = không có role `payment`). Sửa: health Lua trong `k8s/argocd/values.yaml` (`resource.customizations.health.PersistentVolumeClaim`): chỉ PVC có annotation `grab-mini/healthy-when-pending: "true"` mới coi Pending = Healthy. Gỡ kẹt lượt sync cũ: gắn đúng annotation đó lên PVC bằng `kubectl annotate` (lượt sync của commit cũ thấy Healthy → xong → sync commit mới).
+- **Job settlement kẹt `ImagePullBackOff` cả đêm, không alert nào báo**: image `booking-service:v1` là bản `kind load` cũ - dựng lại cluster thì không còn. 8 alert cũ chỉ nhìn 5 service HTTP. Sửa: image `node:22-alpine` + `activeDeadlineSeconds: 300`; thêm alert `GrabMiniPodStuck` (mọi Pod `ImagePullBackOff|ErrImagePull|CrashLoopBackOff|CreateContainerConfigError` > 3 phút - bắt được ngay job settlement đang kẹt), `GrabMiniJobFailed`, `GrabMiniBackupStale` (> 26 giờ không có backup thành công; job tạo tay bằng `kubectl create job --from=cronjob/pg-backup` cũng cập nhật `lastSuccessfulTime`).
+- NetworkPolicy đổi tên theo danh sách `from` (`allow-payment-db-init-pg-backup-to-postgres`) + `prune: false` → bản cũ còn sót → `kubectl delete netpol allow-payment-db-init-to-postgres` (lần 2 gặp, như Final Project).
+
+### 3. Argo Rollouts canary cho booking
+
+```powershell
+# controller: argocd/apps/argo-rollouts.yaml (chart argo/argo-rollouts 2.43.12 = v1.10.2, ns argo-rollouts)
+# chart grab-service: rollout.enabled -> kind Rollout thay Deployment (cùng spec.template), HPA scaleTargetRef -> Rollout,
+#                     templates/analysis.yaml -> AnalysisTemplate <app>-error-rate
+# helm-values/booking-prod.yaml: rollout.enabled + steps
+# argocd/apps/services.yaml: PruneLast=true (push TRƯỚC) -> Deployment cũ chỉ bị xoá khi Rollout đã Healthy
+# ci/workload.ps1: Wait-Workload dùng chung cho pipeline / rollback / demo (Deployment hoặc Rollout; Rollout abort -> throw)
+```
+
+```yaml
+# helm-values/booking-prod.yaml
+rollout:
+  enabled: true
+  steps:
+    - setWeight: 34          # 3 Pod -> 1 Pod canary (không mesh: tỉ lệ traffic = tỉ lệ Pod)
+    - pause: { duration: 45s }
+    - setWeight: 67
+    - pause: { duration: 30s }
+# templates/analysis.yaml - chạy NỀN từ step 1, interval 15s, initialDelay 20s, failureLimit 1
+successCondition: "len(result) == 0 || isNaN(result[0]) || result[0] <= 0.05"
+query: |
+  (sum(rate(http_requests_total{job="booking-service",status=~"5.."}[1m])) or vector(0))   # chưa có 5xx -> series không tồn tại
+  / sum(rate(http_requests_total{job="booking-service"}[1m]))
+```
+
+Kết quả:
+
+- **Chuyển Deployment → Rollout dưới traffic**: Pod Rollout Ready 18s, Deployment bị xoá ở 30s (PruneLast), **0 lỗi server** (2 lỗi `Only one usage of each socket address` = máy Windows chạy traffic hết port tạm, phía client).
+- **Deploy bản tốt** (`./ci/demo.ps1 3`, qua runner): 1/3 → pause → 2/3 → pause → 100% trong **131s**, **0/3200 lỗi**; job `cd` trên GitHub success (pipeline `TimeoutSec` 180 → 300).
+- **Release lỗi** (`./ci/demo.ps1 6`, `BUGGY=true`): Argo CD áp vào Rollout sau 2s, 500 đầu tiên +9s (chỉ Pod canary), **TỰ ABORT +43s**: `Metric "error-rate" assessed Failed due to failed (2) > failureLimit (1)`. Booking **102 lỗi** (trước canary: 218), 4 endpoint khác 0 lỗi. `rollback.ps1` chỉ còn dọn Git: 6s, không tạo Pod mới (ReplicaSet stable vẫn đó).
+
+> **Bài học quan trọng #1 - Sealed Secrets chuyển bài toán, không xoá nó**: Git giờ chứa đủ để dựng lại mọi Secret, nhưng **khoá giải mã** thành thứ phải giữ ngoài Git. Mất khoá = mất mọi Secret (phải tạo lại tay + seal lại). Backup khoá ngay sau khi controller chạy, và **thử khôi phục** (đã làm: xoá khoá → apply file → controller giải mã lại).
+>
+> **Bài học quan trọng #2 - backup chưa restore thử = chưa chắc có backup**: script kéo về luôn restore vào DB tạm và so số dòng. `pg_dump -Fc` không chứa role/password → restore không đè password (khác `pg_dumpall` của runbook cũ). Backup trên PVC trong cluster chỉ chống lỗi logic, không chống mất cluster → phải có bản ngoài.
+>
+> **Bài học quan trọng #3 - health check làm kẹt cả sync**: Argo CD đợi MỌI resource Healthy trước khi chạy hook PostSync. 1 PVC chờ consumer (bình thường với `WaitForFirstConsumer`) đủ chặn `db-init` → cluster mới không có role DB. Thêm resource mới vào app có hook = kiểm tra health của nó.
+>
+> **Bài học quan trọng #4 - alert chỉ nhìn thứ mình nghĩ tới**: 8 alert đều về 5 service HTTP; Job nền kẹt cả đêm không ai biết. Alert theo **trạng thái Pod** (waiting reason) phủ mọi workload, kể cả thứ thêm vào sau.
+>
+> **Bài học quan trọng #5 - canary không mesh: giới hạn**: tỉ lệ traffic = tỉ lệ Pod (3 Pod → bước nhỏ nhất 1/3); analysis đo error rate **cả service** → lỗi nặng ở canary (100%) bị pha loãng thành ~33% vẫn bắt được, nhưng lỗi nhẹ (vd. 10% request canary lỗi → ~3% cả service) sẽ lọt ngưỡng 5%. Muốn chính xác hơn: trafficRouting (nginx canary annotation / service mesh) + metric theo revision.
+>
+> **Bài học quan trọng #6 - script đợi rollout phải đợi đúng revision**: lần chạy demo đầu, vòng lặp thấy Rollout `Healthy` ngay giây 1 (vẫn là bản CŨ, Argo CD chưa áp bản mới) → revert trước khi bản lỗi kịp chạy, traffic "0 lỗi" giả. Luôn chờ `currentPodHash` đổi rồi mới đánh giá.
+
+---
+
 <a id="cleanup"></a>
 ## Cleanup - xoá image Docker cũ không dùng
 
@@ -2851,12 +2982,11 @@ helm upgrade --install loki grafana/loki --version 7.5.0 -n monitoring -f k8s/mo
 helm upgrade --install alloy grafana/alloy --version 1.15.0 -n monitoring -f k8s/monitoring/alloy-values.yaml --wait
 kubectl apply -f k8s/monitoring/servicemonitor-apps.yaml -f k8s/monitoring/alerts-apps.yaml -f k8s/monitoring/alert-webhook.yaml -f k8s/monitoring/grab-mini-dashboard-cm.yaml
 
-# --- 5. app: Secret (ngoài Git) -> Argo CD -> bootstrap 1 lệnh; Argo CD tự dựng platform + 5 service từ Git ---
-#   2 Secret PHẢI có trước: postgres-superuser (StatefulSet postgres initdb + Job db-init), payment-db (db-init tạo role payment, payment-service dùng)
-$pw = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(24)) -replace '[+/=]', ''
-kubectl create secret generic postgres-superuser --from-literal=POSTGRES_PASSWORD=$pw
-$pw = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(24)) -replace '[+/=]', ''
-kubectl create secret generic payment-db --from-literal=DB_USERNAME=payment --from-literal=DB_PASSWORD=$pw; Remove-Variable pw
+# --- 5. app: khoá Sealed Secrets (ngoài Git) -> Argo CD -> bootstrap 1 lệnh; Argo CD tự dựng mọi thứ còn lại từ Git ---
+#   Từ 15/11: Secret postgres-superuser + payment-db nằm trong Git dạng SealedSecret -> chỉ cần khôi phục KHOÁ
+#   TRƯỚC khi controller chạy (controller thấy khoá có sẵn thì dùng, không sinh khoá mới).
+#   Mất file khoá: tạo lại 2 Secret tay (password mới) + kubeseal lại 2 file sealedsecret-*.yaml + commit (Scenario 27).
+kubectl apply -f "$env:USERPROFILE\backups\grab-mini\sealed-secrets-key.yaml"
 helm repo add argo https://argoproj.github.io/argo-helm
 helm upgrade --install argocd argo/argo-cd --version 10.16.0 -n argocd --create-namespace -f k8s/argocd/values.yaml --wait --timeout 5m
 kubectl apply -f argocd/root.yaml
@@ -2866,7 +2996,9 @@ kubectl apply -f argocd/root.yaml
 
 # --- 6. verify ---
 helm list -A                                            # 4 release: monitoring, loki, alloy, argocd
-kubectl get applications -n argocd                      # 7 app Synced Healthy
+kubectl get applications -n argocd                      # 9 app Synced Healthy (thêm sealed-secrets, argo-rollouts)
+kubectl get sealedsecret                                # 2, SYNCED True
+kubectl get rollouts.argoproj.io                        # booking Healthy
 kubectl logs job/db-init                                # db-init done
 kubectl get pods -o wide --sort-by=.spec.nodeName       # Pod trải đều worker / worker2
 curl.exe -s http://localhost/users
@@ -2951,6 +3083,17 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 | `/health` không kiểm tra DB - DB chết mà liveness fail = restart toàn bộ Pod vô ích | [25](#scenario-25) |
 | Least privilege DB 3 lớp: NetworkPolicy, Secret riêng từng service, quyền SQL tối thiểu (`SELECT, INSERT`); superuser chỉ cho Job `db-init` | [25](#scenario-25) |
 
+**Secret, backup, canary (Scenario 27)**
+
+| Bài học | Scenario |
+|---|---|
+| Sealed Secrets: Git đủ để dựng lại Secret, nhưng **khoá giải mã** thành thứ phải giữ ngoài Git - backup ngay + thử khôi phục | [27](#scenario-27) |
+| Backup chưa restore thử = chưa chắc có backup; `pg_dump -Fc` không chứa role/password (restore không đè password); PVC trong cluster không chống mất cluster | [27](#scenario-27) |
+| Argo CD đợi mọi resource Healthy trước hook PostSync - 1 PVC `WaitForFirstConsumer` Pending đủ chặn `db-init` | [27](#scenario-27) |
+| Alert theo trạng thái Pod (waiting reason) phủ mọi workload - Job settlement kẹt cả đêm không alert nào thấy | [27](#scenario-27) |
+| Canary không mesh: traffic = tỉ lệ Pod, analysis cả service pha loãng lỗi canary (100% → ~33%: bắt được; lỗi nhẹ: lọt) | [27](#scenario-27) |
+| Script đợi rollout phải chờ revision mới (`currentPodHash` đổi) - nếu không, thấy Healthy của bản CŨ | [27](#scenario-27) |
+
 **Xử lý sự cố (Production Simulation)**
 
 | Bài học | Scenario |
@@ -3034,16 +3177,16 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 - CD chạy qua **self-hosted runner** trên máy local ([23b](#scenario-23b)) - máy tắt = không deploy được (runner tự chạy khi đăng nhập Windows - Task Scheduler). Chưa có registry chung mà cả runner GitHub lẫn cluster cùng dùng được.
 - Chưa scan lỗ hổng image (Trivy...); chưa có môi trường staging (deploy thẳng prod), chưa có approval / branch protection cho `main`.
 - Argo CD: chưa có webhook (poll 60s), chưa có notifications (Slack) khi sync lỗi, chưa đổi password admin / tắt user admin, chưa scrape metrics Argo CD vào Prometheus. Monitoring, ingress-nginx, metrics-server và chính Argo CD **chưa** được quản lý bằng Argo CD (vẫn Helm/kubectl tay).
-- `postgres-superuser`, `payment-db` tạo tay (ngoài Git) → Argo CD không dựng lại được nếu thiếu; cần Sealed Secrets / External Secrets.
+- Secret dạng SealedSecret trong Git (Scenario 27); khoá giải mã chỉ có 1 bản trên máy cá nhân - chưa có nơi lưu an toàn thứ 2 (password manager / vault). Chưa xoay vòng khoá.
 - Chưa giảm `progressDeadlineSeconds` → Argo CD chỉ báo `Degraded` sau 10 phút.
 - Sửa file dùng chung (`env-prod.yaml`, chart `grab-service`) = rollout **mọi** service cùng lúc - chưa có cách tách đợt (sync-wave / từng app).
 - Registry dùng volume có tên `kind-registry-data` (14/11 - trước đó là volume không tên, `docker volume prune` sẽ xoá sạch image); vẫn chỉ 1 bản trên 1 máy, chưa backup. Registry còn image rác (`registry-test`, `booking-service:989561244027` của Demo C) - `registry:2` mặc định tắt API xoá.
 
 **Vận hành**
 - `ingress-nginx` (v1.15.1) và `metrics-server` (v0.9.1) đã pin trong runbook, nhưng vẫn cài bằng `kubectl apply` tay - chưa quản lý bằng Argo CD.
-- Postgres dùng `local-path` (1 node) - chưa có replication/backup. Redis 1 replica, không lưu đĩa (cache - chấp nhận mất).
+- Postgres dùng `local-path` (1 node) - chưa có replication. Backup tự động mỗi đêm vào PVC trong cluster (Scenario 27); bản ngoài cluster chỉ có khi chạy `ci/pg-backup-pull.ps1` tay. Redis 1 replica, không lưu đĩa (cache - chấp nhận mất).
 - **Khuyến nghị từ Production Simulation (chưa làm)**:
-  - Incident 2: progressive delivery (Argo Rollouts canary + AnalysisTemplate theo error rate → tự abort), hoặc PostSync smoke Job cho thay đổi config đi thẳng Git.
+  - Incident 2: ~~canary tự abort~~ (đã làm cho booking, Scenario 27); còn: 4 service khác chưa canary, analysis đo cả service (lỗi nhẹ ở canary bị pha loãng) → trafficRouting nginx + metric theo revision.
   - Incident 4: Alertmanager + `alert-webhook` 2 replica trải 2 node (hiện cùng node với kube-state-metrics → mất node = mất kênh báo động); outlier detection (service mesh) để đóng ~50s vùng mù; descheduler cân bằng lại Pod khi node quay về.
   - Incident 5: việc dài (> ~20s) đưa vào hàng đợi/job thay vì giữ request HTTP.
   - Incident 6: cache có giới hạn (LRU/TTL); công cụ heap profiling trên prod.
