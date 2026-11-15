@@ -16,7 +16,9 @@ app.get("/health", (req, res) => res.status(200).send("ok"));
 app.post("/notify", (req, res) => {
   const notificationId = randomUUID();
   const type = (req.body && req.body.type) || "unknown";
-  console.log(JSON.stringify({ event: "notify", notificationId, type, pod: process.env.HOSTNAME, body: req.body }));
+  // chỉ log các trường đã biết - KHÔNG log nguyên body (client gửi gì cũng vào Loki: tới 100KB/request, có thể chứa dữ liệu cá nhân)
+  const b = req.body || {};
+  console.log(JSON.stringify({ event: "notify", notificationId, type: String(type).slice(0, 64), bookingId: b.bookingId, driverId: b.driverId, transactionId: b.transactionId, pod: process.env.HOSTNAME }));
   res.json({ service: "notification-service", version: VERSION, notificationId, type });
 });
 

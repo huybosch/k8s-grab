@@ -56,6 +56,7 @@ test("amount không hợp lệ -> 400, không ghi DB", async () => {
   const n = rows.length;
   assert.equal((await pay({ amount: -5 })).status, 400);
   assert.equal((await pay({ amount: "abc" })).status, 400);
+  assert.equal((await pay({ amount: 1e12 })).status, 400, "vượt numeric(12,2) -> 400, không phải 503");
   assert.equal(rows.length, n);
 });
 

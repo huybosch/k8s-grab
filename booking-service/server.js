@@ -62,9 +62,15 @@ async function notify(payload) {
   }
 }
 
+// Endpoint GÂY LỖI cho lab (/toggle-health, /slow): mặc định TẮT. /booking/slow đi qua Ingress public ->
+//   ai cũng giữ được 1 kết nối + 1 timer tới 60s mỗi request (DoS rẻ). Bật khi tập sự cố: env ENABLE_FAULT_ENDPOINTS=true.
+//   Đọc env mỗi request (không phải lúc load) để test bật/tắt được.
+const faultEndpoints = () => process.env.ENABLE_FAULT_ENDPOINTS === "true";
+const requireFault = (req, res, next) => (faultEndpoints() ? next() : res.status(404).json({ error: "not found" }));
+
 let healthy = true;
 app.get("/health", (req, res) => res.status(healthy ? 200 : 500).send(healthy ? "ok" : "fail"));
-app.post("/toggle-health", (req, res) => { healthy = !healthy; res.json({ healthy }); });
+app.post("/toggle-health", requireFault, (req, res) => { healthy = !healthy; res.json({ healthy }); });
 
 app.post("/booking", async (req, res) => {
   if (BUGGY) {
@@ -85,9 +91,11 @@ app.post("/booking", async (req, res) => {
 
 // Phase 12 + Incident 5: request chậm giả lập (mặc định 10s, ?ms=15000 -> 15s, tối đa 60s)
 // /booking/slow: đi qua được Ingress (prefix /booking) + NetworkPolicy (chỉ ingress-nginx vào được booking)
-app.get(["/slow", "/booking/slow"], (req, res) => {
+app.get(["/slow", "/booking/slow"], requireFault, (req, res) => {
   const ms = Math.min(Number(req.query.ms) || 10000, 60000);
-  setTimeout(() => res.send(`done after ${ms / 1000}s by ${process.env.HOSTNAME}`), ms);
+  const timer = setTimeout(() => res.send(`done after ${ms / 1000}s by ${process.env.HOSTNAME}`), ms);
+  // client bỏ đi trước khi xong -> huỷ timer (không giữ res + closure thêm tới 60s cho người đã đi)
+  res.on("close", () => clearTimeout(timer));
 });
 
 // Phase 23: chỉ listen khi chạy trực tiếp (node server.js); khi test thì require("./server") lấy app

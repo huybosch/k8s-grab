@@ -113,7 +113,14 @@ test("GET /metrics có counter http_requests_total theo route + status", async (
   assert.doesNotMatch(text, /route="\/health"/, "/health không được tính vào metrics");
 });
 
-test("GET /booking/slow?ms=50 trả sau ~50ms (Incident 5)", async () => {
+test("endpoint gây lỗi mặc định TẮT (404)", async () => {
+  delete process.env.ENABLE_FAULT_ENDPOINTS;
+  assert.equal((await fetch(`${base}/booking/slow?ms=50`)).status, 404);
+  assert.equal((await fetch(`${base}/toggle-health`, { method: "POST" })).status, 404);
+});
+
+test("GET /booking/slow?ms=50 trả sau ~50ms (Incident 5, ENABLE_FAULT_ENDPOINTS=true)", async () => {
+  process.env.ENABLE_FAULT_ENDPOINTS = "true";
   const t0 = Date.now();
   const r = await fetch(`${base}/booking/slow?ms=50`);
   assert.equal(r.status, 200);

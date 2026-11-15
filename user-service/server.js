@@ -31,7 +31,12 @@ app.set("redis", process.env.REDIS_URL && require.main === module ? createRedis(
 const LEAK_KB = Number(process.env.LEAK_KB_PER_REQUEST || 0);
 const leaked = [];
 
-const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`timeout ${ms}ms`)), ms))]);
+// huỷ timer khi lệnh Redis xong trước: không thì MỖI request để lại 1 timer sống thêm REDIS_TIMEOUT_MS
+function withTimeout(p, ms) {
+  let timer;
+  const t = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`timeout ${ms}ms`)), ms); });
+  return Promise.race([p, t]).finally(() => clearTimeout(timer));
+}
 
 app.get("/health", (req, res) => res.status(200).send("ok"));
 

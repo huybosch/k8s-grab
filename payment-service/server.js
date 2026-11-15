@@ -39,7 +39,8 @@ app.get("/health", (req, res) => res.status(200).send("ok"));
 
 app.post("/payment", async (req, res) => {
   const amount = Number((req.body && req.body.amount) ?? 0);
-  if (!Number.isFinite(amount) || amount < 0) {
+  // cột amount numeric(12,2): lớn hơn 9.999.999.999,99 -> DB từ chối -> trước đây thành 503 "database unavailable" (sai nguyên nhân)
+  if (!Number.isFinite(amount) || amount < 0 || amount > 9999999999.99) {
     return res.status(400).json({ service: "payment-service", error: "invalid amount" });
   }
   // Idempotency key: caller (booking) gửi paymentId -> gọi lại (retry) cùng paymentId KHÔNG ghi trừ tiền 2 lần.
