@@ -99,16 +99,19 @@ function Test-Smoke([string]$Svc) {
     "booking" { @{ Uri = "http://localhost/booking"; Method = "POST"; Expect = '"payment":{"service":"payment-service"' } }
     "driver"  { @{ Uri = "http://localhost/drivers"; Method = "GET";  Expect = "driver-service" } }
     # notification KHÔNG có route Ingress (chỉ nội bộ) -> gọi từ trong 1 Pod booking (NetworkPolicy chỉ cho booking/driver vào)
-    "notification" { @{ Exec = "deploy/booking"; Uri = "http://notification-service/notify"; Method = "POST"; Expect = "notification-service"; Body = '{"type":"smoke-test"}' } }
+    #   chọn Pod theo label, KHÔNG "deploy/booking": booking là Argo Rollout từ 15/11 -> deploy/booking không tồn tại
+    #   -> smoke luôn fail -> pipeline revert oan MỌI deploy notification (gặp 15/11)
+    "notification" { @{ Exec = "app=booking"; Uri = "http://notification-service/notify"; Method = "POST"; Expect = "notification-service"; Body = '{"type":"smoke-test"}' } }
   }
   $body = if ($req.Body) { $req.Body } else { '{}' }
   for ($i = 1; $i -le 10; $i++) {
     try {
       if ($req.Exec) {
         $PSNativeCommandUseErrorActionPreference = $false
-        $content = kubectl exec $req.Exec -- wget -qO- -T 5 --header "Content-Type: application/json" --post-data $body $req.Uri 2>&1
+        $pod = kubectl get pods -n default -l $req.Exec --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}'
+        $content = kubectl exec $pod -- wget -qO- -T 5 --header "Content-Type: application/json" --post-data $body $req.Uri 2>&1
         $PSNativeCommandUseErrorActionPreference = $true
-        if ($LASTEXITCODE -eq 0 -and "$content".Contains($req.Expect)) { Write-Host "    (từ $($req.Exec)) $($req.Method) $($req.Uri) -> ok"; return }
+        if ($LASTEXITCODE -eq 0 -and "$content".Contains($req.Expect)) { Write-Host "    (từ $pod) $($req.Method) $($req.Uri) -> ok"; return }
         Write-Host "    lần $i : $content"
       } else {
         $r = Invoke-WebRequest -Uri $req.Uri -Method $req.Method -Body $body -ContentType "application/json" -UseBasicParsing -TimeoutSec 5
