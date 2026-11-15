@@ -82,3 +82,28 @@ spec:
             severity: critical
           annotations:
             summary: "Prometheus không scrape được {{ $labels.pod }} ({{ $labels.job }})"
+        # 15/11: job settlement kẹt ImagePullBackOff cả đêm mà không alert nào báo (các alert trên chỉ nhìn 5 service HTTP).
+        #   -> alert chung cho MỌI Pod trong namespace default (kể cả Job/CronJob, Postgres, Redis).
+        - alert: GrabMiniPodStuck
+          expr: max by (pod, container, reason) (kube_pod_container_status_waiting_reason{namespace="default",reason=~"ImagePullBackOff|ErrImagePull|CrashLoopBackOff|CreateContainerConfigError"}) > 0
+          for: 3m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.pod }}/{{ $labels.container }} kẹt {{ $labels.reason }} > 3 phút"
+        # Job Failed (hết backoffLimit / activeDeadlineSeconds) trong 12 giờ qua
+        - alert: GrabMiniJobFailed
+          expr: |
+            max by (job_name) (kube_job_status_failed{namespace="default"}) > 0
+            and on (job_name) (time() - max by (job_name) (kube_job_created{namespace="default"})) < 12 * 3600
+          labels:
+            severity: warning
+          annotations:
+            summary: "Job {{ $labels.job_name }} thất bại"
+        # Backup: lịch chạy mỗi đêm -> 26 giờ không có bản thành công = lỡ ít nhất 1 lần
+        - alert: GrabMiniBackupStale
+          expr: time() - kube_cronjob_status_last_successful_time{namespace="default",cronjob="pg-backup"} > 26 * 3600
+          labels:
+            severity: critical
+          annotations:
+            summary: "Backup Postgres gần nhất cách đây {{ $value | humanizeDuration }}"

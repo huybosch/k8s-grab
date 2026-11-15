@@ -1,0 +1,70 @@
+{{- if and .Values.postgres.enabled .Values.pgBackup.enabled }}
+# Backup Postgres tự động (15/11/2026): pg_dump mỗi đêm -> PVC pg-backup, giữ {{ .Values.pgBackup.keep }} bản mới nhất.
+#   -Fc (custom format): nén, restore được từng bảng; KHÔNG chứa role/password (khác pg_dumpall) -> restore không đè password.
+#   PVC nằm TRONG cluster: chống lỗi logic (xoá nhầm, migration hỏng), KHÔNG chống mất cluster.
+#   Bản ngoài cluster + restore thử: ./ci/pg-backup-pull.ps1 (copy bản mới nhất về máy, restore vào DB tạm, so số dòng).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pg-backup
+  labels:
+    {{- include "grab-platform.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.pgBackup.storage }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pg-backup
+  labels:
+    {{- include "grab-platform.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.pgBackup.schedule | quote }}
+  concurrencyPolicy: Forbid          # bản trước chưa xong thì không chạy chồng
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 600
+      template:
+        metadata:
+          labels:
+            app: pg-backup           # NetworkPolicy: postgres chỉ nhận từ payment, db-init, pg-backup
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          containers:
+            - name: pg-dump
+              image: {{ .Values.postgres.image }}   # cùng bản pg_dump với server
+              env:
+                - { name: PGHOST, value: postgres }
+                - { name: PGDATABASE, value: {{ .Values.postgres.database | quote }} }
+                - { name: PGUSER, value: postgres }
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: {{ required "postgres.passwordSecret là bắt buộc" .Values.postgres.passwordSecret }}, key: POSTGRES_PASSWORD }
+                - { name: KEEP, value: {{ .Values.pgBackup.keep | quote }} }
+              command: ["sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  f="/backup/$PGDATABASE-$(date -u +%Y%m%d-%H%M%S).dump"
+                  pg_dump -Fc -f "$f.part"
+                  pg_restore --list "$f.part" > /dev/null      # file đọc được mới tính là backup
+                  mv "$f.part" "$f"                            # đổi tên sau cùng: không bao giờ có file .dump dở dang
+                  ls -1t /backup/*.dump | tail -n +$((KEEP + 1)) | xargs -r rm -f
+                  echo "backup ok: $f ($(du -h "$f" | cut -f1)); giữ lại:"; ls -lh /backup
+              volumeMounts:
+                - { name: backup, mountPath: /backup }
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { memory: 256Mi }
+          volumes:
+            - name: backup
+              persistentVolumeClaim:
+                claimName: pg-backup
+{{- end }}

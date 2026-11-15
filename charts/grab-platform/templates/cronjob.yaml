@@ -7,8 +7,11 @@ metadata:
     {{- include "grab-platform.labels" . | nindent 4 }}
 spec:
   schedule: {{ .Values.settlement.schedule | quote }}
+  concurrencyPolicy: Forbid
   jobTemplate:
     spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 300   # kẹt (vd. không kéo được image) quá 5 phút -> Job Failed -> alert GrabMiniJobFailed
       template:
         spec:
           containers:

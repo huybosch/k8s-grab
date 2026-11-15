@@ -52,7 +52,7 @@ networkPolicies:
   allow:                   # mỗi dòng -> 1 NetworkPolicy "allow-<from>-to-<to>"
     - { to: payment, from: [booking], port: 3004 }
     - { to: notification, from: [booking, driver], port: 3005 }
-    - { to: postgres, from: [payment, db-init], port: 5432 }   # booking KHÔNG còn vào DB (không dùng)
+    - { to: postgres, from: [payment, db-init, pg-backup], port: 5432 }   # booking KHÔNG còn vào DB (không dùng)
     - { to: redis, from: [user], port: 6379 }
   # Incident 7: chiều EGRESS cho mọi app trong appPorts, sinh từ danh sách allow ở trên (+ DNS)
   egress:
@@ -62,7 +62,9 @@ settlement:
   enabled: true
   name: settlement-job
   schedule: "0 0 * * *"
-  image: booking-service:v1
+  # 15/11: trước là booking-service:v1 (image `kind load` cũ) - dựng lại cluster thì không còn trên node
+  #   -> job đêm 14/11 kẹt ImagePullBackOff, KHÔNG alert nào báo. Job chỉ là giả lập -> image công khai, pin version.
+  image: node:22-alpine
 
 postgres:
   enabled: true
@@ -71,6 +73,13 @@ postgres:
   # Secret tạo tay (ngoài Git), key POSTGRES_PASSWORD:
   #   kubectl create secret generic postgres-superuser --from-literal=POSTGRES_PASSWORD=<random>
   passwordSecret: postgres-superuser
+  storage: 1Gi
+
+# Backup Postgres (15/11) - templates/pg-backup.yaml. Giờ UTC: 19:00 UTC = 02:00 giờ VN (lệch giờ settlement 00:00 UTC)
+pgBackup:
+  enabled: true
+  schedule: "0 19 * * *"
+  keep: 7
   storage: 1Gi
 
 # Sealed Secrets (15/11): Secret postgres-superuser + payment-db lấy từ templates/sealedsecret-*.yaml (mã hoá cho namespace default)
