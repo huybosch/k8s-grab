@@ -68,7 +68,7 @@ switch ($Scene) {
     Title "3. Deploy = git push (self-hosted runner -> pipeline -> Argo CD)"
     Sync-Main
     $before = Get-Image booking; Say "đang chạy: $before"
-    Start-Traffic 90
+    Start-Traffic 150
     $f = "booking-service/server.js"
     $lines = Get-Content $f
     $stamp = "// demo deploy $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
@@ -122,7 +122,7 @@ switch ($Scene) {
       Start-Sleep 1
       $s = (kubectl get rollouts.argoproj.io booking -o json | ConvertFrom-Json).status
       $ar = $s.canary.currentBackgroundAnalysisRunStatus
-      $now = "phase={0} step={1} canary={2}% analysis={3}" -f $s.phase, $s.currentStepIndex, $s.canary.weights.canary.weight, $ar.status
+      $now = "phase={0} step={1} pod mới={2}/{3} analysis={4}" -f $s.phase, $s.currentStepIndex, $s.updatedReplicas, $s.replicas, $ar.status
       if ($now -ne $last) { "  +{0,5}  {1}" -f (Elapsed $sw), $now; $last = $now }
       if (-not $first500) { try { $null = Invoke-WebRequest -Method Post http://127.0.0.1/booking -Body '{}' -ContentType application/json -UseBasicParsing -TimeoutSec 3 } catch { if ($_.Exception.Response.StatusCode.value__ -eq 500) { $first500 = Elapsed $sw; Say "500 đầu tiên lúc +$first500 (chỉ từ Pod canary)" } } }
     } until ($s.abort -or ($s.phase -eq "Healthy" -and $s.stableRS -eq $s.currentPodHash) -or $sw.Elapsed.TotalSeconds -gt 240)

@@ -24,7 +24,7 @@ function Wait-Workload([string]$Name, [int]$TimeoutSec = 300) {
   $deadline = (Get-Date).AddSeconds($TimeoutSec); $last = ""
   while ((Get-Date) -lt $deadline) {
     $s = (kubectl get rollouts.argoproj.io $Name -n default -o json | ConvertFrom-Json).status
-    $now = "phase={0} step={1} weight={2}" -f $s.phase, $s.currentStepIndex, $s.canary.weights.canary.weight
+    $now = "phase={0} step={1} pod mới={2}/{3}" -f $s.phase, $s.currentStepIndex, $s.updatedReplicas, $s.replicas   # canary không mesh: tỉ lệ traffic = tỉ lệ Pod
     if ($now -ne $last) { Write-Host "    rollout $Name : $now $($s.message)"; $last = $now }
     if ($s.abort -or $s.phase -eq "Degraded") { throw "Rollout $Name bị ABORT: $($s.message)" }
     if ($s.phase -eq "Healthy" -and $s.stableRS -eq $s.currentPodHash) { return }
