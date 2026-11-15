@@ -1,0 +1,34 @@
+# Argo Rollouts controller (15/11/2026) - canary cho booking: bản mới nhận 1/3 traffic trước,
+#   AnalysisTemplate đo error rate trên Prometheus, vượt ngưỡng -> TỰ abort về bản cũ (không cần người bấm rollback).
+# project default: cần CRD + ClusterRole (cấp cluster) - project grab-mini cấm.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argo-rollouts
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: default
+  source:
+    repoURL: https://argoproj.github.io/argo-helm
+    chart: argo-rollouts
+    targetRevision: 2.43.12       # app v1.10.2
+    helm:
+      releaseName: argo-rollouts
+      valuesObject:
+        dashboard:
+          enabled: false
+        controller:
+          replicas: 1
+          resources:
+            requests: { cpu: 20m, memory: 64Mi }
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argo-rollouts
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
