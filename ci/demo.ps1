@@ -6,7 +6,7 @@ Demo cuối khoá - mỗi cảnh 1 lệnh, in ra đúng số liệu cần nói. 
   ./ci/demo.ps1 3   # deploy = git push: sửa code booking -> runner tự chạy pipeline -> Argo CD -> 0 lỗi
   ./ci/demo.ps1 4   # self-heal: ai đó scale tay -> Argo CD đưa về Git
   ./ci/demo.ps1 5   # Pod chết dưới traffic -> 0 lỗi
-  ./ci/demo.ps1 6   # release lỗi -> thấy lỗi -> rollback 1 lệnh (git revert)
+  ./ci/demo.ps1 6   # release lỗi -> canary (1/3 traffic) -> analysis thấy error rate -> TỰ abort; dọn Git bằng rollback
   ./ci/demo.ps1 7   # tải tăng -> HPA scale
   ./ci/demo.ps1 8   # bảo mật: Pod bị chiếm làm được gì?
 
@@ -17,6 +17,7 @@ param([Parameter(Mandatory)][ValidateRange(1, 8)][int]$Scene)
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
+. "$root/ci/workload.ps1"
 
 function Title([string]$t) { Write-Host "`n=== $t ===" -ForegroundColor Cyan }
 function Say([string]$t) { Write-Host "  $t" -ForegroundColor Yellow }
@@ -35,7 +36,7 @@ function Sync-Main {
   git fetch -q origin main
   if ([int](git rev-list --count HEAD..origin/main) -gt 0) { git pull -q --rebase origin main }
 }
-function Get-Image([string]$d) { kubectl get deploy $d -o jsonpath='{.spec.template.spec.containers[0].image}' }
+function Get-Image([string]$d) { Get-WorkloadImage $d }
 
 switch ($Scene) {
   1 {
@@ -79,7 +80,8 @@ switch ($Scene) {
     do { Start-Sleep 3; $now = Get-Image booking } until ($now -ne $before -or $sw.Elapsed.TotalSeconds -gt 300)
     if ($now -eq $before) { throw "sau 300s image chưa đổi - runner có đang chạy không? (C:\actions-runner\run.cmd)" }
     Say "Argo CD nhận tag mới sau $(Elapsed $sw): $now"
-    kubectl rollout status deploy/booking --timeout=180s | Out-Null
+    Say "booking chạy canary: 1/3 Pod mới (45s) -> 2/3 (30s) -> 100%, analysis đo error rate suốt quá trình"
+    Wait-Workload booking 300
     Say "rollout xong sau $(Elapsed $sw) (pipeline còn smoke test vài giây)"
     Stop-Traffic
     Sync-Main; Say "commit do runner tạo: $(git log -1 --format='%h %s' -- helm-values/booking-image.yaml)"
@@ -105,20 +107,28 @@ switch ($Scene) {
     Stop-Traffic
   }
   6 {
-    Title "6. Release lỗi -> phát hiện -> rollback 1 lệnh"
+    Title "6. Release lỗi -> canary 1/3 traffic -> analysis thấy lỗi -> TỰ huỷ"
     Sync-Main
-    Start-Traffic 120
+    Start-Traffic 150
     Start-Sleep 5
     $v = "helm-values/booking.yaml"
     (Get-Content -Raw $v) -replace "  VERSION: v1`n", "  VERSION: v1`n  BUGGY: `"true`"   # demo: release lỗi`n" | Set-Content -NoNewline $v
     git add $v; git commit -q -m "release(booking): config mới (demo - có lỗi)"; git push -q origin HEAD:main
     kubectl -n argocd annotate application booking argocd.argoproj.io/refresh=normal --overwrite | Out-Null
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    Say "đã push release lỗi - readiness /health vẫn OK nên Kubernetes KHÔNG chặn được"
-    do { Start-Sleep 1; $code = try { (Invoke-WebRequest -Method Post http://127.0.0.1/booking -Body '{}' -ContentType application/json -UseBasicParsing).StatusCode } catch { $_.Exception.Response.StatusCode.value__ } } until ($code -eq 500 -or $sw.Elapsed.TotalSeconds -gt 120)
-    Say "booking bắt đầu trả 500 sau $(Elapsed $sw); Argo CD vẫn báo: $(kubectl -n argocd get application booking -o jsonpath='{.status.health.status}')"
-    Start-Sleep 15
-    Say "rollback:"
+    Say "đã push release lỗi - /health vẫn OK nên readiness KHÔNG chặn được; lần này booking là canary"
+    $last = ""; $first500 = $null
+    do {
+      Start-Sleep 1
+      $s = (kubectl get rollouts.argoproj.io booking -o json | ConvertFrom-Json).status
+      $ar = $s.canary.currentBackgroundAnalysisRunStatus
+      $now = "phase={0} step={1} canary={2}% analysis={3}" -f $s.phase, $s.currentStepIndex, $s.canary.weights.canary.weight, $ar.status
+      if ($now -ne $last) { "  +{0,5}  {1}" -f (Elapsed $sw), $now; $last = $now }
+      if (-not $first500) { try { $null = Invoke-WebRequest -Method Post http://127.0.0.1/booking -Body '{}' -ContentType application/json -UseBasicParsing -TimeoutSec 3 } catch { if ($_.Exception.Response.StatusCode.value__ -eq 500) { $first500 = Elapsed $sw; Say "500 đầu tiên lúc +$first500 (chỉ từ Pod canary)" } } }
+    } until ($s.abort -or ($s.phase -eq "Healthy" -and $s.stableRS -eq $s.currentPodHash) -or $sw.Elapsed.TotalSeconds -gt 240)
+    if ($s.abort) { Say "TỰ ABORT sau $(Elapsed $sw): $($s.message)" } else { Say "KHÔNG abort - kiểm tra AnalysisTemplate!" }
+    Say "Pod lúc này (canary đã về 0, stable 100%):"; kubectl get pods -l app=booking --no-headers | ForEach-Object { "    $_" }
+    Say "Git vẫn chứa bản lỗi (Argo CD: $(kubectl -n argocd get application booking -o jsonpath='{.status.health.status}')) -> dọn bằng git revert:"
     ./ci/rollback.ps1 -Service booking
     Stop-Traffic
   }

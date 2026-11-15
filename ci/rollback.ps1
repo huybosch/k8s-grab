@@ -15,6 +15,7 @@ param(
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
 Set-Location (Split-Path $PSScriptRoot -Parent)
+. "$PSScriptRoot/workload.ps1"
 $sw = [Diagnostics.Stopwatch]::StartNew()
 
 git fetch -q origin main
@@ -32,5 +33,5 @@ do {
   $s = (kubectl -n argocd get application $Service -o json | ConvertFrom-Json).status
 } until (($s.sync.revision -eq $rev -and $s.sync.status -eq "Synced" -and $s.health.status -eq "Healthy") -or (Get-Date) -gt $deadline)
 if ((Get-Date) -gt $deadline) { throw "Argo CD chưa sync $Service về $($rev.Substring(0,7)) sau ${TimeoutSec}s" }
-kubectl rollout status "deployment/$Service" --timeout "${TimeoutSec}s" | Out-Null
+Wait-Workload $Service $TimeoutSec
 "rolled back: $(git log -1 --format='%h %s') - {0:N0}s" -f $sw.Elapsed.TotalSeconds

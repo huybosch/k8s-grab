@@ -19,12 +19,13 @@ param(
   [ValidateSet("booking", "payment", "user", "driver", "notification")]
   [string[]]$Service,
   [string]$Registry = "localhost:5001",
-  [int]$TimeoutSec = 180
+  [int]$TimeoutSec = 300   # booking là canary (Argo Rollouts): 2 pause 45s + 30s + tạo Pod -> ~2 phút
 )
 
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true   # lệnh ngoài (git, npm, docker, kubectl) trả exit code != 0 -> dừng pipeline
 Set-Location (Split-Path $PSScriptRoot -Parent)
+. "$PSScriptRoot/workload.ps1"   # Deployment hoặc Argo Rollout
 
 function Invoke-Stage([string]$Name, [scriptblock]$Body) {
   $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -62,7 +63,7 @@ function Wait-ArgoSync([string]$App, [string]$Revision) {
         $s.operationState.phase -ne "Running") {
       # Argo CD có thể báo Healthy 1 nhịp trước khi controller thấy generation mới -> chốt lại bằng rollout status (chỉ đọc)
       $left = [int]($deadline - (Get-Date)).TotalSeconds
-      kubectl rollout status "deployment/$App" -n default --timeout "$([Math]::Max($left, 1))s" | Out-Null
+      Wait-Workload $App ([Math]::Max($left, 1))   # Rollout canary bị abort (analysis lỗi) -> throw -> git revert
       return
     }
     Start-Sleep -Seconds 3
