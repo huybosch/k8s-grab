@@ -24,3 +24,8 @@ spec:
       selfHeal: true
     syncOptions:
       - ServerSideApply=true
+    # Cluster mới: app này có thể sync TRƯỚC khi controller sealed-secrets cài xong CRD SealedSecret
+    #   -> sync lỗi "could not find SealedSecret". Không có retry, automated sync KHÔNG tự thử lại cùng commit.
+    retry:
+      limit: 10
+      backoff: { duration: 10s, factor: 2, maxDuration: 3m }
