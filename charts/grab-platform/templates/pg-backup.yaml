@@ -9,6 +9,9 @@ metadata:
   name: pg-backup
   labels:
     {{- include "grab-platform.labels" . | nindent 4 }}
+  annotations:
+    # local-path = WaitForFirstConsumer: Pending tới lần backup đầu -> Argo CD coi là Healthy (k8s/argocd/values.yaml)
+    grab-mini/healthy-when-pending: "true"
 spec:
   accessModes: ["ReadWriteOnce"]
   resources:

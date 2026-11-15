@@ -14,6 +14,23 @@ configs:
     # Không có webhook GitHub -> cluster (máy cá nhân, không có IP public) nên Argo CD tự POLL Git.
     # Mặc định 180s; để 60s cho lab đỡ chờ. Pipeline còn chủ động "refresh" ngay sau khi push.
     timeout.reconciliation: 60s
+    # 15/11: PVC của storage class WaitForFirstConsumer (local-path) ở Pending tới khi có Pod đầu tiên dùng.
+    #   PVC pg-backup chỉ có Pod dùng lúc CronJob chạy (19:00 UTC) -> health mặc định "Progressing" làm sync kẹt
+    #   ("waiting for healthy state of PVC/pg-backup") -> hook PostSync db-init KHÔNG chạy (cluster mới: thiếu role payment).
+    #   Chỉ PVC có annotation grab-mini/healthy-when-pending="true" mới coi Pending = Healthy; PVC khác giữ nguyên mặc định.
+    resource.customizations.health.PersistentVolumeClaim: |
+      hs = { status = "Progressing", message = "Waiting for PVC to be bound" }
+      if obj.status ~= nil and obj.status.phase ~= nil then
+        if obj.status.phase == "Bound" then
+          hs.status = "Healthy"; hs.message = "PVC is bound"
+        elseif obj.status.phase == "Lost" then
+          hs.status = "Degraded"; hs.message = "PVC is lost"
+        elseif obj.status.phase == "Pending" and obj.metadata.annotations ~= nil
+            and obj.metadata.annotations["grab-mini/healthy-when-pending"] == "true" then
+          hs.status = "Healthy"; hs.message = "Pending until first consumer (WaitForFirstConsumer)"
+        end
+      end
+      return hs
 
 dex:
   enabled: false
