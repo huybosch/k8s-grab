@@ -2934,6 +2934,8 @@ Dùng khi cluster hỏng hẳn - điển hình: **Docker Desktop restart làm `g
 
 > Mất data: PVC của Postgres (local-path) nằm trong container node → **xoá cluster = mất data Postgres**.
 >
+> **Lần 2 - 15/11/2026, runbook có Sealed Secrets + Argo Rollouts**: cluster trắng → 9 app Synced Healthy **93s sau bootstrap**, khoá khôi phục từ file được dùng (1 khoá trong cluster, không sinh mới), 2 SealedSecret giải mã ở giây 31, `grab-platform` lúc đầu `Missing` (CRD SealedSecret chưa có) rồi tự sync nhờ `retry`, `db-init done`, **payments khôi phục 25739 = đúng số lúc backup**, 36/36 target up, 12 netpol, user chỉ OPEN redis + DNS, backup trên cluster mới chạy được (restore thử 25740 = 25740). Thời gian: 0 backup 7s, 1 cluster 29s, 2 registry 14s, 3 ingress/metrics 88s, 4 monitoring 354s, 5 Argo CD 56s + bootstrap 93s ≈ **11 phút**. Lỗi duy nhất do người gõ lệnh: `| Select-Object -First 1` kill `helm` giữa chừng (xem bước 0).
+>
 > **Đã chạy trọn vẹn 1 lần liên tục ngày 13/11/2026** (xoá cluster thật, dựng lại từ đầu): **~11 phút, không bước nào lỗi, không sửa tay**.
 >
 > | Bước | Thời gian | Kết quả |
@@ -2951,9 +2953,11 @@ Dùng khi cluster hỏng hẳn - điển hình: **Docker Desktop restart làm `g
 ```powershell
 cd D:\OBsidian\NUO3HC\Kubernetes\grab-mini
 
-# --- 0. backup Postgres (xoá cluster = mất PVC). Image postgres không có role "root" -> phải -U postgres ---
-New-Item -ItemType Directory -Force "$env:USERPROFILE\backups\grab-mini" | Out-Null   # KHÔNG để trong %TEMP% (Windows tự dọn)
-kubectl exec postgres-0 -- pg_dumpall -U postgres > "$env:USERPROFILE\backups\grab-mini\pg-backup-$(Get-Date -Format yyyyMMdd).sql"
+# --- 0. backup Postgres ra ngoài cluster (xoá cluster = mất PVC, kể cả PVC pg-backup) ---
+#   pg_dump -Fc (không chứa role/password) -> copy về %USERPROFILE%\backups\grab-mini + restore thử vào DB tạm
+./ci/pg-backup-pull.ps1 -Now
+# KHÔNG cắt output lệnh dài bằng "| Select-Object -First N": PowerShell 7 dừng pipeline = KILL tiến trình helm
+#   -> release kẹt "pending-install" (gặp 15/11) -> helm uninstall rồi cài lại. Muốn gọn: $o = helm ... 2>&1
 
 # --- 1. cluster 3 node (control-plane có port 80/443 + nhãn ingress-ready) ---
 kind delete cluster --name grab-mini
@@ -2990,6 +2994,10 @@ kubectl apply -f "$env:USERPROFILE\backups\grab-mini\sealed-secrets-key.yaml"
 helm repo add argo https://argoproj.github.io/argo-helm
 helm upgrade --install argocd argo/argo-cd --version 10.16.0 -n argocd --create-namespace -f k8s/argocd/values.yaml --wait --timeout 5m
 kubectl apply -f argocd/root.yaml
+# --- 5b. khôi phục data (bảng payments) từ bản backup ở bước 0 - sau khi 9 app Healthy (db-init đã tạo bảng) ---
+$dump = Get-ChildItem "$env:USERPROFILE\backups\grab-mini\grabmini-*.dump" | Sort-Object LastWriteTime | Select-Object -Last 1
+Push-Location $dump.DirectoryName; kubectl cp $dump.Name default/postgres-0:/tmp/restore.dump; Pop-Location   # kubectl cp không nhận "C:\..."
+kubectl exec postgres-0 -- sh -c 'pg_restore -U postgres -d "$POSTGRES_DB" --data-only -t payments /tmp/restore.dump && rm -f /tmp/restore.dump'
 # image tag lấy từ helm-values/<svc>-image.yaml trong Git -> image PHẢI còn trong registry kind-registry
 #   (mất registry: ./ci/pipeline.ps1 -Service notification,driver,payment,user,booking - build + push lại; tag không đổi -> không có commit mới)
 # cluster mới: Argo CD tự tạo object -> KHÔNG cần migrate-field-managers, không có release Helm nào để xoá
