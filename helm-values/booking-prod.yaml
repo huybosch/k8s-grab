@@ -14,3 +14,12 @@ autoscaling:
 pdb:
   minAvailable: 2
   maxUnavailable: null
+# 15/11: canary (Argo Rollouts) - Incident 2: release lỗi tới 100% người dùng trong ~9s, phải có người rollback.
+#   3 Pod: setWeight 34 = 1 Pod canary (~1/3 traffic). Analysis nền đo error rate từ step 1 -> lỗi thì tự abort.
+rollout:
+  enabled: true
+  steps:
+    - setWeight: 34
+    - pause: { duration: 45s }
+    - setWeight: 67
+    - pause: { duration: 30s }

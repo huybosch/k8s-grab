@@ -1,5 +1,7 @@
-apiVersion: apps/v1
-kind: Deployment
+{{- $ro := .Values.rollout.enabled }}
+# rollout.enabled -> Argo Rollouts (canary + tự abort theo error rate). spec.template giống hệt Deployment.
+apiVersion: {{ ternary "argoproj.io/v1alpha1" "apps/v1" $ro }}
+kind: {{ ternary "Rollout" "Deployment" $ro }}
 metadata:
   name: {{ .Values.app }}
   labels:
@@ -7,6 +9,18 @@ metadata:
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  {{- if $ro }}
+  strategy:
+    canary:
+      maxSurge: 1
+      maxUnavailable: 0           # không giảm công suất trong lúc canary (giống Deployment maxUnavailable 0)
+      analysis:
+        templates:
+          - templateName: {{ .Values.app }}-error-rate
+        startingStep: {{ .Values.rollout.analysisStartingStep }}
+      steps:
+        {{- toYaml .Values.rollout.steps | nindent 8 }}
   {{- end }}
   selector:
     matchLabels:

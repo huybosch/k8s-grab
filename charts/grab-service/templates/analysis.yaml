@@ -1,0 +1,27 @@
+{{- if .Values.rollout.enabled }}
+# Error rate 5xx của CẢ service (stable + canary) trong 1 phút. Canary lỗi 100% với 1/3 Pod -> ~33% -> vượt ngưỡng.
+#   Không lọc được riêng Pod canary: metric của app không có label revision (hướng mở rộng: kube-state-metrics
+#   xuất label rollouts-pod-template-hash rồi join theo pod) -> lỗi nhẹ trên canary bị pha loãng bởi stable.
+# "or vector(0)": chưa có request 5xx nào thì series 5xx KHÔNG tồn tại -> phép chia ra rỗng.
+# Không có traffic (mẫu số rỗng) -> result rỗng -> coi là đạt (không có bằng chứng lỗi).
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: {{ .Values.app }}-error-rate
+  labels:
+    {{- include "grab-service.labels" . | nindent 4 }}
+spec:
+  metrics:
+    - name: error-rate
+      interval: {{ .Values.rollout.analysisInterval }}
+      initialDelay: {{ .Values.rollout.analysisInitialDelay }}
+      failureLimit: {{ .Values.rollout.analysisFailureLimit }}
+      successCondition: "len(result) == 0 || isNaN(result[0]) || result[0] <= {{ .Values.rollout.maxErrorRate }}"
+      provider:
+        prometheus:
+          address: {{ .Values.rollout.prometheusAddress }}
+          query: |
+            (sum(rate(http_requests_total{job="{{ include "grab-service.serviceName" . }}",status=~"5.."}[1m])) or vector(0))
+            /
+            sum(rate(http_requests_total{job="{{ include "grab-service.serviceName" . }}"}[1m]))
+{{- end }}

@@ -63,6 +63,20 @@ autoscaling:
   maxReplicas: 10
   targetCPUUtilizationPercentage: 50
 
+# 15/11/2026 - Argo Rollouts canary. enabled -> render kind Rollout (argoproj.io) thay cho Deployment.
+#   Canary KHÔNG có service mesh: tỉ lệ traffic = tỉ lệ Pod (Service chọn cả Pod stable lẫn canary).
+#   Analysis chạy NỀN suốt quá trình (từ step analysisStartingStep): error rate 5xx của cả service > maxErrorRate
+#   failureLimit+1 lần liên tiếp -> Rollout tự ABORT: canary về 0 Pod, stable 100%.
+rollout:
+  enabled: false
+  maxErrorRate: 0.05
+  analysisInterval: 15s
+  analysisInitialDelay: 20s     # đợi Pod canary nhận traffic + Prometheus scrape (15s) trước lần đo đầu
+  analysisFailureLimit: 1       # 2 lần đo vượt ngưỡng -> abort
+  analysisStartingStep: 1       # sau step setWeight đầu tiên
+  prometheusAddress: http://monitoring-kube-prometheus-prometheus.monitoring.svc:9090
+  steps: []
+
 service:
   port: 80
   labels:
