@@ -2,7 +2,7 @@
 
 Kịch bản ~15 phút: một nền tảng đặt xe nhỏ (5 microservice + Postgres + Redis) chạy trên Kubernetes 3 node, deploy hoàn toàn bằng GitOps, chịu được Pod chết, release lỗi và tải tăng 10 lần.
 
-Mỗi cảnh chạy bằng **1 lệnh** `./ci/demo.ps1 <số>` (PowerShell 7, thư mục `grab-mini`). Số liệu "Kết quả tập" bên dưới lấy từ lần chạy tập ngày 13/11/2026 trên cluster vừa dựng lại từ đầu.
+Hệ thống là gì, chạy thế nào: [README.md](README.md). Mỗi cảnh chạy bằng **1 lệnh** `./ci/demo.ps1 <số>` (PowerShell 7, thư mục `grab-mini`). Số liệu "Kết quả tập" bên dưới lấy từ lần chạy tập ngày 13/11/2026 trên cluster vừa dựng lại từ đầu.
 
 ## Kiến trúc
 
@@ -122,7 +122,7 @@ Dashboard `grab-mini-services`: request rate, error rate (thấy rõ vạch lỗ
 - **Nền tảng**: kind 3 node, 5 service Node.js, Postgres StatefulSet, Redis, Ingress, ConfigMap/Secret, probes, requests/limits, HPA, PDB, topologySpread, graceful shutdown (preStop 10s, keepAlive 65s).
 - **Đóng gói + deploy**: 1 Helm chart dùng chung cho 5 service + chart platform; Argo CD app-of-apps + ApplicationSet; pipeline test → build → container smoke → push → commit tag → đợi sync → smoke → tự revert; GitHub Actions CI; CD qua self-hosted runner.
 - **Vận hành**: Prometheus/Grafana/Loki/Alertmanager, 8 alert app; 7 incident chạy thật có số đo trước/sau; runbook dựng lại cluster đã chạy thật (~11 phút).
-- **Bảo mật**: NetworkPolicy default-deny cả 2 chiều, least privilege DB (role payment chỉ SELECT/INSERT), không mount ServiceAccount token, runner guard.
+- **Bảo mật**: NetworkPolicy default-deny cả 2 chiều, least privilege DB (role payment chỉ SELECT/INSERT), không mount ServiceAccount token, runner guard, Sealed Secrets, quét dependency (vá `body-parser` DoS) + Node 24 LTS, endpoint gây lỗi mặc định tắt.
 
 ## Phần còn yếu
 

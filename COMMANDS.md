@@ -1,23 +1,21 @@
-# Grab Mini - Command Reference (Phase 0 → Phase 24 + Final Project + Production Simulation)
+# Grab Mini - Nhật ký lab
 
-Nhật ký lab: mỗi **Scenario** = lệnh đã chạy thật + code liên quan + kết quả đã verify + bài học, theo đúng thứ tự làm. Giáo trình (học gì, vì sao) nằm ở [../Roadmap.md](../Roadmap.md).
+**Người mới: đọc [README.md](README.md) trước** - kiến trúc, cách hệ thống được quản lý, việc hằng ngày, xử lý sự cố. File này là **nhật ký** theo đúng thứ tự đã làm (Scenario 0 → 28): mỗi Scenario = lệnh đã chạy thật → code liên quan → kết quả đo được → bài học. Dùng để tra cứu "vì sao lại làm thế này". Giáo trình (học gì, theo lịch nào): [../Roadmap.md](../Roadmap.md).
 
-> **⚠️ Git (`github.com/huybosch/k8s-grab`, nhánh `main`) là nguồn sự thật của namespace `default`** - Argo CD sync `charts/` + `helm-values/` vào cluster (Phase 24). **Deploy app = `./ci/pipeline.ps1 -Service <svc>`** (commit tag + `git push`); sửa hạ tầng = sửa file + `git push`. Các lệnh `kubectl apply -f k8s/...` (Scenario 0-20), `helm upgrade`/`helm rollback` (Scenario 22-23) là **lịch sử** - chạy lại sẽ bị Argo CD selfHeal đè lại (hoặc tạo field lạ mà Argo CD không quản lý). Muốn dựng lại môi trường: dùng [🔁 Dựng lại toàn bộ cluster](#rebuild). Kịch bản demo cuối khoá: [DEMO.md](DEMO.md).
+> **⚠️ Scenario 0-23 là lịch sử.** Khi đó cluster được sửa bằng `kubectl apply -f k8s/...` hoặc `helm upgrade` trực tiếp. Từ Scenario 24, **Git là nguồn sự thật** và Argo CD đè lại mọi sửa tay → đừng chạy lại các lệnh đó trên cluster hiện tại. Muốn dựng lại môi trường: [🔁 Dựng lại toàn bộ cluster](#rebuild). Trạng thái hiện tại: [README §2](README.md#2-cách-hệ-thống-được-quản-lý).
 
-## 📊 Trạng thái hiện tại (11/11/2026)
+Đọc nhanh theo chủ đề:
 
-| Thành phần | Chi tiết | Quản lý bởi |
-|---|---|---|
-| Cluster | `kind` v0.33, `grab-mini`, 1 control-plane (port 80/443 ra host) + 2 worker - `kind-multi-node.yaml` | `kind` |
-| Code | `grab-mini/` = repo `github.com/huybosch/k8s-grab` (public, nhánh `main`); mỗi lần deploy = 1 commit `deploy(<svc>): <sha>`, rollback = commit `Revert ...` | `git` + GitHub Actions `ci.yaml` (test + build + chạy thử container) |
-| GitOps | Argo CD 3.6.1 (namespace `argocd`): `root` → AppProject `grab-mini`, ApplicationSet `grab-services` (5 service), `grab-platform`, `sealed-secrets`, `argo-rollouts`; poll Git 60s, selfHeal; health Lua cho PVC `WaitForFirstConsumer` | Helm: `argocd` (`k8s/argocd/values.yaml`) + `kubectl apply -f argocd/root.yaml` (1 lần) |
-| Registry | `registry:2.8.3` container `kind-registry`, `localhost:5001` (trong cluster: `http://kind-registry:5000`) | `ci/setup-local-registry.ps1` |
-| App | `booking` (**Argo Rollout canary** 1/3 → 2/3 → 100%, tự abort theo error rate; HPA 3-20), `payment` (HPA 3-10), `user` x3, `driver` x3, `notification` x2 - image `localhost:5001/<svc>-service:<git-sha>` (tag đang chạy: `helm-values/<svc>-image.yaml`); probe, PDB, topologySpread (`matchLabelKeys`), preStop 10s, keepAliveTimeout 65s, requests/limits, không mount ServiceAccount token, failover 30s | `ci/pipeline.ps1` → Git → Argo CD: ApplicationSet `grab-services` (chart `grab-service`) |
-| Platform | ConfigMap `booking-config`, Ingress `/users` `/booking` `/payment` `/payments` `/drivers`, 12 NetworkPolicy (default-deny + 4 luồng ingress + 5 `egress-<app>`), Ingress retry (`proxy-connect-timeout 1s`, `next-upstream`), CronJob `settlement-job` (`node:22-alpine`), CronJob `pg-backup` (02:00 VN, PVC 7 bản), StatefulSet `postgres` (bảng `payments`, role `payment`), Job `db-init` (PostSync), Deployment `redis` (toleration 30s) | Git → Argo CD: `grab-platform` (không prune) |
-| Secret | `postgres-superuser` (superuser Postgres), `payment-db` (user DB `payment`) - password ngẫu nhiên, **SealedSecret trong Git**; khoá giải mã: `%USERPROFILE%\backups\grab-mini\sealed-secrets-key.yaml` (ngoài Git) | Git → Argo CD (`grab-platform`) → controller `sealed-secrets` |
-| Hạ tầng | `ingress-nginx` (+ patch nodeSelector), `metrics-server` (+ patch insecure-tls) | `kubectl apply` từ URL upstream |
-| Monitoring | `kube-prometheus-stack` 93.1.1, Loki 7.5.0, Alloy 1.15.0 (namespace `monitoring`) | Helm: `monitoring`, `loki`, `alloy` |
-| Monitoring config | ServiceMonitor, PrometheusRule (11 alert: error rate, p95, no pods, restarting, OOMKilled, memory near limit, memory leak, target down, Pod kẹt, Job lỗi, backup cũ), `alert-webhook`, dashboard Grafana | `kubectl apply -f k8s/monitoring/` |
+| Muốn hiểu | Đọc |
+|---|---|
+| Pod, Deployment, Service, ConfigMap/Secret, probe, rolling update | Scenario 0-8 |
+| Tài nguyên, HPA, tắt Pod an toàn, Ingress | Scenario 9-12 |
+| Lưu trữ (PVC, StatefulSet), Job | Scenario 13-15 |
+| Nhiều node, node chết, HA, NetworkPolicy | Scenario 16-19 |
+| Metrics, log, alert | Scenario 20-21 |
+| Helm, CI/CD, GitOps (Argo CD), runner | Scenario 22-24 |
+| Hệ thống đầy đủ, 7 sự cố thật, Secret/backup/canary, quét lỗi | Scenario 25-28 |
+| Tất cả bài học gom lại | [🧠 Tổng hợp bài học](#bai-hoc) |
 
 ## 📋 Menu
 
@@ -50,6 +48,7 @@ Nhật ký lab: mỗi **Scenario** = lệnh đã chạy thật + code liên quan
 - [Scenario 25 - Final Project: ráp đủ Grab Mini Platform (5 service + Redis + PostgreSQL)](#scenario-25)
 - [Scenario 26 - Production Simulation: Incident 1-7 (gây sự cố thật, đo, xử lý, vá)](#scenario-26)
 - [Scenario 27 - Sealed Secrets, backup Postgres tự động, Argo Rollouts canary](#scenario-27)
+- [Scenario 28 - Quét lỗi tiềm ẩn, rò rỉ bộ nhớ, dependency](#scenario-28)
 - [Cleanup - xoá image Docker cũ không dùng](#cleanup)
 - [🔁 Dựng lại toàn bộ cluster từ đầu](#rebuild)
 - [🧠 Tổng hợp bài học](#bai-hoc)
@@ -2719,6 +2718,7 @@ docker start grab-mini-worker2
 kubectl rollout restart deploy booking payment user driver notification   # rải lại Pod (node về KHÔNG tự cân bằng)
 
 # ---------- Incident 5: deploy khi có request 15s ----------
+#   từ 15/11 (Scenario 28): /booking/slow mặc định TẮT -> thêm ENABLE_FAULT_ENDPOINTS: "true" vào env của helm-values/booking.yaml, push; tập xong revert
 node ci/slow-burst.js 15000 30     # rồi NGAY: kubectl rollout restart deploy/booking
 node ci/slow-burst.js 35000 30     # đối chứng: request dài hơn grace period
 
@@ -2915,6 +2915,54 @@ Kết quả:
 
 ---
 
+<a id="scenario-28"></a>
+## Scenario 28 - Quét lỗi tiềm ẩn, rò rỉ bộ nhớ, dependency (15/11/2026)
+
+Đọc lại code 5 service + chart + script, chạy `npm audit`, `helm lint`, thử tải dài để tìm leak. Mọi bản sửa được deploy qua pipeline và kiểm chứng trên prod.
+
+| # | Tìm thấy | Mức | Sửa | Kiểm chứng |
+|---|---|---|---|---|
+| 1 | `body-parser` 2.0-2.3 (qua `express.json()`, mọi service, public qua Ingress): DoS bằng body nén có byte thừa - [GHSA-27r3-jxmh-p828](https://github.com/advisories/GHSA-27r3-jxmh-p828); `qs` DoS (moderate) | **high** | `npm audit fix` → body-parser 2.4.0 | `npm audit`: 0 lỗ hổng cả 5 service |
+| 2 | Image `node:20-alpine`: Node 20 **hết hỗ trợ 30/04/2026**, tag không pin | **high** | `node:24.22.3-alpine` (Node 24 LTS, tới 04/2028) | test 5 service chạy **trong** image mới: 27/27 pass; 5 Pod `node -v` = v24.22.3 |
+| 3 | `/booking/slow?ms=60000` đi qua Ingress public: ai cũng giữ được 1 kết nối + 1 timer 60s/request; timer không huỷ khi client bỏ đi | medium | endpoint gây lỗi (`/slow`, `/toggle-health`) mặc định **tắt** (404), bật bằng env `ENABLE_FAULT_ENDPOINTS=true`; `clearTimeout` khi `res` close | prod: `/booking/slow` → 404; test mới "mặc định tắt" |
+| 4 | Smoke test notification trong pipeline exec vào `deploy/booking` - booking là Rollout từ Scenario 27 → **mọi deploy notification bị revert oan** (gặp thật khi deploy bản sửa này) | medium | exec vào Pod chọn theo label `app=booking` | `./ci/pipeline.ps1 -Service notification`: smoke ok, DONE 25s |
+| 5 | notification log **nguyên body** request (client gửi gì cũng vào Loki, tới 100KB/request, có thể chứa dữ liệu cá nhân) | low | chỉ log các trường đã biết (type ≤ 64 ký tự, bookingId, driverId, transactionId) | log prod chỉ còn các trường đó |
+| 6 | payment: `amount` > 9.999.999.999,99 (giới hạn `numeric(12,2)`) → DB từ chối → trả **503 "database unavailable"** (sai nguyên nhân, làm alert error rate kêu oan) | low | validate → 400 | prod: `amount: 1e12` → 400; test mới |
+| 7 | user: `withTimeout` không huỷ timer → mỗi request để lại 1 timer sống thêm 300ms | low | `finally(clearTimeout)` | - |
+| 8 | `package.json` `"main": "index.js"` (file không tồn tại) | low | `"server.js"` | - |
+
+Không phải lỗi (đã kiểm tra):
+
+- **Helm `include`**: mọi helper được gọi (`grab-service.labels/selectorLabels/serviceName`, `grab-platform.labels`) đều có `define`; `helm lint` 2 chart với values của 5 service + prod + dev: 0 lỗi.
+- **Cardinality metrics**: label `route` dùng pattern (`/drivers/:id/accept`) không dùng URL thật, route lạ → `unmatched` → số series có giới hạn.
+- **Fault injection `LEAK_KB_PER_REQUEST`** (user) là leak cố ý cho Incident 6, mặc định 0.
+- `server.close()` khi SIGTERM: Node ≥ 19 tự đóng kết nối keep-alive đang rảnh → không phải đợi 65s (`keepAliveTimeout`).
+
+**Thử rò rỉ bộ nhớ** - `./ci/leak-check.ps1` (mới): 4 endpoint × 4 luồng × 240s (~123.000 request, 0 lỗi), đo heap Node.js và working set container trước / giữa / cuối tải / sau 90s nghỉ:
+
+```text
+service           heap0  heapGiữa  heapCuối  heapNghỉ |      ws0   wsCuối   wsNghỉ
+booking           16.7M     19.7M       21M     21.4M |    37.9M      38M    38.2M
+payment           16.9M     17.6M     17.8M     17.7M |    32.8M    33.6M    33.5M
+user              15.4M     22.5M     21.7M     21.7M |    37.5M    38.8M    38.3M
+driver            21.5M     21.2M     20.2M     16.5M |    38.1M    39.2M    38.3M
+notification      12.4M     15.8M     13.6M       14M |    25.4M    30.6M    30.2M
+```
+
+Kết luận: **không thấy leak** - heap tăng vài MiB lúc đầu (JIT, cache nội bộ) rồi **đứng yên** từ giữa tải tới sau nghỉ; working set ±1 MiB. So với leak thật ở Incident 6: 18 → 226 MiB trong 77s. Leak rất chậm (vài KB/nghìn request) cần chạy lâu hơn: `./ci/leak-check.ps1 -LoadSec 1800`.
+
+> **Bài học #1 - dependency cũng là code của mình**: không dòng nào trong `server.js` sai, nhưng `express.json()` kéo theo `body-parser` có lỗ hổng DoS trên mọi endpoint public. `npm audit` nên chạy trong CI (chặn build khi có high).
+>
+> **Bài học #2 - runtime có ngày hết hạn**: `node:20-alpine` build vẫn chạy bình thường sau EOL - không có gì báo lỗi, chỉ là không còn bản vá. Pin bản cụ thể + theo dõi lịch EOL.
+>
+> **Bài học #3 - đổi 1 thứ thì soát mọi chỗ giả định về nó**: chuyển booking Deployment → Rollout (Scenario 27) đã sửa pipeline/rollback/demo, nhưng sót `deploy/booking` trong smoke test của **service khác** (notification) - chỉ lộ ra ở lần deploy notification tiếp theo. `grep` tên cũ trên toàn repo trước khi đổi.
+>
+> **Bài học #4 - endpoint debug là bề mặt tấn công**: endpoint giả lập lỗi tiện cho lab nhưng đi qua Ingress public là ai cũng gọi được. Mặc định tắt, bật có chủ đích.
+>
+> **Bài học #5 - PowerShell: `-f` có độ ưu tiên cao hơn `*`**: `"..." -f a, (x) * 2` = (chuỗi đã format) × 2 → lần đầu chạy `leak-check.ps1` in ra 64MB. Tính giá trị ra biến trước.
+
+---
+
 <a id="cleanup"></a>
 ## Cleanup - xoá image Docker cũ không dùng
 
@@ -3091,6 +3139,16 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 | `/health` không kiểm tra DB - DB chết mà liveness fail = restart toàn bộ Pod vô ích | [25](#scenario-25) |
 | Least privilege DB 3 lớp: NetworkPolicy, Secret riêng từng service, quyền SQL tối thiểu (`SELECT, INSERT`); superuser chỉ cho Job `db-init` | [25](#scenario-25) |
 
+**Quét lỗi (Scenario 28)**
+
+| Bài học | Scenario |
+|---|---|
+| Dependency là code của mình: `express.json()` kéo theo `body-parser` có lỗ hổng DoS trên mọi endpoint public → `npm audit` trong CI | [28](#scenario-28) |
+| Runtime hết hạn không báo lỗi (Node 20 EOL vẫn chạy, chỉ không còn bản vá) → pin bản cụ thể, theo dõi lịch EOL | [28](#scenario-28) |
+| Đổi 1 thứ (Deployment → Rollout) → `grep` mọi chỗ giả định về nó, kể cả script của service khác | [28](#scenario-28) |
+| Endpoint giả lập lỗi đi qua Ingress public = bề mặt tấn công → mặc định tắt | [28](#scenario-28) |
+| Thử leak: tải liên tục + đo heap/working set trước/giữa/cuối/sau nghỉ - heap đứng yên sau khởi động = không leak | [28](#scenario-28) |
+
 **Secret, backup, canary (Scenario 27)**
 
 | Bài học | Scenario |
@@ -3176,36 +3234,38 @@ Mỗi dòng là 1 điều đã **tự gặp khi chạy thật** (chi tiết + b�
 <a id="con-thieu"></a>
 ## Việc còn thiếu
 
+Sắp theo mức ảnh hưởng. Mục đã làm đã được xoá khỏi danh sách (xem Scenario tương ứng).
+
+**Rủi ro mất dữ liệu / mất khả năng vận hành**
+- Mọi thứ trên **1 máy cá nhân**: tắt máy = không có cluster, không deploy được (runner, registry, cluster cùng máy).
+- Khoá Sealed Secrets (`%USERPROFILE%\backups\grab-mini\sealed-secrets-key.yaml`) và file backup DB chỉ có **1 bản** → cất thêm vào password manager / ổ khác. Chưa xoay vòng khoá.
+- Postgres 1 replica trên `local-path` (1 node). Backup tự động mỗi đêm nằm **trong** cluster; bản ngoài cluster chỉ có khi chạy `ci/pg-backup-pull.ps1`.
+- Registry `kind-registry` 1 bản, chưa backup (mất = build lại bằng `pipeline.ps1`).
+- Alertmanager + `alert-webhook` 1 replica, alert **chưa gửi tới kênh thật** (Slack/Telegram) → không ai nhận được báo động.
+
+**Bảo mật**
+- Chưa chạy `npm audit` / Trivy trong CI (lần quét 28 làm tay); chưa có branch protection cho `main`.
+- Argo CD: chưa đổi password admin / tắt user admin. Grafana: password admin mặc định của chart.
+- NetworkPolicy cho namespace `argocd`, `monitoring` chưa có; egress mới có cho 5 app (Postgres, Redis chưa). Redis không có AUTH.
+- Chưa có runtime detection (Falco), chưa audit log Postgres.
+
+**Triển khai**
+- Canary chỉ có ở booking; analysis đo error rate cả service (lỗi nhẹ ở canary bị pha loãng) → trafficRouting nginx + metric theo revision.
+- Chưa có staging (deploy thẳng prod); `env-staging.yaml` chưa dùng.
+- Sửa file dùng chung (`env-prod.yaml`, chart `grab-service`) = rollout cả 5 service cùng lúc.
+- Argo CD poll Git 60s (không có webhook vì cluster không có IP public); chưa có thông báo khi sync lỗi.
+- ingress-nginx, metrics-server, monitoring, Argo CD vẫn cài tay (đã pin version), chưa nằm trong Argo CD.
+- Label `app.kubernetes.io/version` (= tag image) gắn trên **mọi** resource của service → mỗi deploy cập nhật label của Service/PDB/HPA (vô hại, nhưng diff ồn).
+
 **App**
-- Driver/notification là bản tối giản: danh sách tài xế cố định, notification chỉ ghi log (chưa gửi SMS/push), chưa có queue (booking gọi notification đồng bộ - nên đổi sang message queue / outbox).
-- Chưa có migration tool (Flyway / node-pg-migrate) - schema nằm trong Job `db-init`; chưa có bảng `bookings` (booking không lưu gì).
-- Image `<svc>-service:v1/v2/v3` (bản `kind load` cũ của Phase 2-21) vẫn còn trên node + Docker Desktop nhưng không còn dùng - prod chạy `localhost:5001/<svc>-service:<sha>`.
-
-**CI/CD + GitOps**
-- CD chạy qua **self-hosted runner** trên máy local ([23b](#scenario-23b)) - máy tắt = không deploy được (runner tự chạy khi đăng nhập Windows - Task Scheduler). Chưa có registry chung mà cả runner GitHub lẫn cluster cùng dùng được.
-- Chưa scan lỗ hổng image (Trivy...); chưa có môi trường staging (deploy thẳng prod), chưa có approval / branch protection cho `main`.
-- Argo CD: chưa có webhook (poll 60s), chưa có notifications (Slack) khi sync lỗi, chưa đổi password admin / tắt user admin, chưa scrape metrics Argo CD vào Prometheus. Monitoring, ingress-nginx, metrics-server và chính Argo CD **chưa** được quản lý bằng Argo CD (vẫn Helm/kubectl tay).
-- Secret dạng SealedSecret trong Git (Scenario 27); khoá giải mã chỉ có 1 bản trên máy cá nhân - chưa có nơi lưu an toàn thứ 2 (password manager / vault). Chưa xoay vòng khoá.
-- Chưa giảm `progressDeadlineSeconds` → Argo CD chỉ báo `Degraded` sau 10 phút.
-- Sửa file dùng chung (`env-prod.yaml`, chart `grab-service`) = rollout **mọi** service cùng lúc - chưa có cách tách đợt (sync-wave / từng app).
-- Registry dùng volume có tên `kind-registry-data` (14/11 - trước đó là volume không tên, `docker volume prune` sẽ xoá sạch image); vẫn chỉ 1 bản trên 1 máy, chưa backup. Registry còn image rác (`registry-test`, `booking-service:989561244027` của Demo C) - `registry:2` mặc định tắt API xoá.
-
-**Vận hành**
-- `ingress-nginx` (v1.15.1) và `metrics-server` (v0.9.1) đã pin trong runbook, nhưng vẫn cài bằng `kubectl apply` tay - chưa quản lý bằng Argo CD.
-- Postgres dùng `local-path` (1 node) - chưa có replication. Backup tự động mỗi đêm vào PVC trong cluster (Scenario 27); bản ngoài cluster chỉ có khi chạy `ci/pg-backup-pull.ps1` tay. Redis 1 replica, không lưu đĩa (cache - chấp nhận mất).
-- **Khuyến nghị từ Production Simulation (chưa làm)**:
-  - Incident 2: ~~canary tự abort~~ (đã làm cho booking, Scenario 27); còn: 4 service khác chưa canary, analysis đo cả service (lỗi nhẹ ở canary bị pha loãng) → trafficRouting nginx + metric theo revision.
-  - Incident 4: Alertmanager + `alert-webhook` 2 replica trải 2 node (hiện cùng node với kube-state-metrics → mất node = mất kênh báo động); outlier detection (service mesh) để đóng ~50s vùng mù; descheduler cân bằng lại Pod khi node quay về.
-  - Incident 5: việc dài (> ~20s) đưa vào hàng đợi/job thay vì giữ request HTTP.
-  - Incident 6: cache có giới hạn (LRU/TTL); công cụ heap profiling trên prod.
-  - Incident 7: NetworkPolicy ingress cho namespace `argocd`, `monitoring`; Redis AUTH; runtime detection (Falco); audit log Postgres.
-- Egress NetworkPolicy mới có cho 5 app trong `default` (Incident 7); Postgres/Redis và namespace khác chưa có.
+- notification gọi đồng bộ (nên đổi sang hàng đợi / outbox); việc dài (> ~20s) nên chạy nền thay vì giữ request HTTP (Incident 5).
+- Chưa có migration tool (schema nằm trong Job `db-init`); booking không lưu gì vào DB.
+- driver: danh sách tài xế cố định; notification chỉ ghi log.
 
 **Observability**
-- Chưa có tracing (OpenTelemetry), chưa scrape metrics của `ingress-nginx`, alert chưa gửi tới receiver thật (Slack/Telegram).
+- Chưa có tracing (OpenTelemetry); chưa scrape metrics của ingress-nginx và Argo CD.
+- Sau khi dựng lại cluster, lịch sử Prometheus/Grafana/Loki mất (không backup).
 
-**Helm**
-- `env-staging.yaml` chưa deploy thử; chưa đóng gói/publish chart (`helm package`, OCI registry); chưa dùng plugin `helm-diff`.
-
-**Roadmap**
-- Demo cuối khoá + review toàn bộ; giai đoạn 2: đưa lên AWS EKS (Future Plan trong Roadmap).
+**Khác**
+- Certificate của cluster `kind` hết hạn sau 1 năm (cluster tạo 15/11/2026) → dựng lại trước đó.
+- Giai đoạn 2: đưa lên AWS EKS (Roadmap - Future Plan).
